@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: m2a-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: m2a_pentest
+      POSTGRES_USER: m2a_user
+      POSTGRES_PASSWORD: <db_password>
+      TZ: Asia/Taipei
+    ports:
+      - "15432:5432"
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql

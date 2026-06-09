@@ -1,0 +1,5 @@
+- [x] Trace calculate_risk_v3() call path
+- [x] Identify where risk_v3.next_action is assigned
+- [x] Examine all assignments to next_action in the specified files
+- [x] Find root cause of the inconsistency
+- [x] Fix the decide_next_action function in risk_engine_v2.py to ensure consistency between next_tool and next_action
