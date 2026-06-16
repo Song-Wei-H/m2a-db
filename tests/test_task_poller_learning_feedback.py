@@ -165,7 +165,10 @@ async def test_execute_task_remote_timeout_marks_failed_and_writes_tool_result()
     ), patch("worker.task_poller.validate_task_execution"), patch(
         "worker.task_poller.run_remote_tool",
         AsyncMock(side_effect=TimeoutError(timeout_reason)),
-    ), patch("worker.learning_feedback.create_learning_feedback", AsyncMock()):
+    ), patch("worker.learning_feedback.create_learning_feedback", AsyncMock()), patch(
+        "worker.task_poller.finalize_target_if_idle",
+        AsyncMock(return_value=False),
+    ):
         await execute_task(86)
 
     failed_update = fail_db.execute.await_args.args[0]

@@ -31,19 +31,19 @@ The platform is NOT:
 
 ```text
 Target
-↓
+??
 ToolTask
-↓
+??
 Worker
-↓
+??
 ToolResult
-↓
+??
 Analysis Pipeline
-↓
+??
 Decision
-↓
+??
 Task Generator
-↓
+??
 ToolTask
 ```
 
@@ -57,35 +57,35 @@ Create a complete governed execution loop from target intake to controlled tool 
 
 ```text
 Target
-↓
+??
 Dispatcher
-↓
+??
 Policy Validation
-↓
+??
 ToolRegistry Validation
-↓
+??
 ToolTask
-↓
+??
 Worker
-↓
+??
 Approval Validation
-↓
+??
 CommandTemplate Rendering
-↓
+??
 subprocess(shell=False)
-↓
+??
 Parser
-↓
+??
 ToolResult
-↓
+??
 Analysis Pipeline
-    ├─ Evidence Normalizer
-    ├─ MITRE Mapper
-    ├─ Confidence Engine
-    └─ Decision Engine
-↓
+    ?��? Evidence Normalizer
+    ?��? MITRE Mapper
+    ?��? Confidence Engine
+    ?��? Decision Engine
+??
 Task Generator
-↓
+??
 ToolTask
 ```
 
@@ -258,7 +258,7 @@ Restart the API after schema changes.
 
 ## Start Services
 
-### Terminal 1 — API
+### Terminal 1 ??API
 
 Recommended:
 
@@ -278,7 +278,7 @@ Manual fallback:
 .\.venv\Scripts\python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
 ```
 
-### Terminal 2 — Dispatcher
+### Terminal 2 ??Dispatcher
 
 Run only one instance:
 
@@ -288,7 +288,7 @@ Run only one instance:
 
 Legacy `dispatcher.py` has been archived under `_archive/legacy_unused/`.
 
-### Terminal 3 — Worker Task Poller
+### Terminal 3 ??Worker Task Poller
 
 Windows development host:
 
@@ -532,12 +532,12 @@ Worker must execute only fixed templates.
 Examples:
 
 ```text
-nmap_service  → /usr/bin/nmap -sV -Pn <target>
-httpx_basic   → /usr/bin/httpx -title -tech-detect -u <url>
-nuclei_safe   → /usr/bin/nuclei -severity low,medium,high,critical -u <url>
-dirb_safe     → /usr/bin/dirb <url>
-ssh-enum      → controlled SSH enumeration template
-mysql-info    → controlled MySQL information template
+nmap_service  ??/usr/bin/nmap -sV -Pn <target>
+httpx_basic   ??/usr/bin/httpx -title -tech-detect -u <url>
+nuclei_safe   ??/usr/bin/nuclei -severity low,medium,high,critical -u <url>
+dirb_safe     ??/usr/bin/dirb <url>
+ssh-enum      ??controlled SSH enumeration template
+mysql-info    ??controlled MySQL information template
 ```
 
 Worker execution must use:
@@ -556,17 +556,17 @@ ToolResult enters the analysis pipeline:
 
 ```text
 ToolResult
-↓
+??
 normalize_tool_result()
-↓
+??
 map_to_mitre()
-↓
+??
 calculate_confidence()
-↓
+??
 decide_next_action()
-↓
+??
 generate_tool_task()
-↓
+??
 ToolTask
 ```
 
