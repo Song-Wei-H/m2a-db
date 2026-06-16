@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import subprocess
 from dataclasses import dataclass
@@ -11,9 +10,8 @@ from dataclasses import dataclass
 from app.config import settings
 from app.mitre_rules import FORBIDDEN_TOOLS
 from worker.command_templates import build_command_with_template
-from worker.parsers.httpx_parser import parse_httpx_output
-from worker.parsers.ssh_enum_parser import parse_ssh_enum_output
 from worker.parsers.nmap_parser import parse_nmap_output
+from worker.parsers.tool_result_parser import parse_tool_output
 from worker.safety import validate_task_execution
 
 logger = logging.getLogger(__name__)
@@ -61,62 +59,30 @@ def build_command(ctx: TaskContext, template_row) -> tuple[list[str], str]:
     return argv, rendered_command
 
 
-def _parse_output(template_id: str, raw_output: str, success: bool) -> dict:
-    if template_id == "httpx_basic":
-        parsed = parse_httpx_output(raw_output)
-
-    elif template_id == "nuclei_safe":
-        findings: list[dict] = []
-
-        for line in raw_output.splitlines():
-            line = line.strip()
-
-            if not line:
-                continue
-
-            try:
-                row = json.loads(line)
-
-                if isinstance(row, dict):
-                    findings.append(row)
-
-            except json.JSONDecodeError:
-                continue
-
-        parsed = {
-            "tool": "nuclei_safe",
-            "finding_count": len(findings),
-            "findings": findings[:50],
-        }
-
-    elif template_id == "ssh-enum":
-        parsed = parse_ssh_enum_output(raw_output)
-        parsed["status"] = "done" if success else "failed"
-        return parsed
-    elif template_id == "nmap_service":
-        parsed = {
-            "tool": "nmap_service",
-            "status": "done" if success else "failed",
-            "open_ports": parse_nmap_output(raw_output)
-        }
-        return parsed
-
-    else:
-        parsed = {
-            "tool": template_id,
-            "line_count": len(raw_output.splitlines()),
-            "preview": raw_output[:4000],
-        }
-
-    parsed["status"] = "done" if success else "failed"
-    return parsed
+def _parse_output(
+    template_id: str,
+    raw_output: str,
+    success: bool,
+    *,
+    host: str | None = None,
+    port: int | None = None,
+    service: str | None = None,
+) -> dict:
+    return parse_tool_output(
+        template_id,
+        raw_output,
+        success=success,
+        host=host,
+        port=port,
+        service=service,
+    )
 
 
 def _run_subprocess(
     cmd: list[str],
     rendered_command: str,
     timeout: int,
-    tool_name: str,
+    ctx: TaskContext,
 ) -> ToolRunOutcome:
     command_str = rendered_command
 
@@ -136,7 +102,14 @@ def _run_subprocess(
 
         success = completed.returncode == 0
         
-        parsed = _parse_output(tool_name, raw_output, success)
+        parsed = _parse_output(
+            ctx.tool_name,
+            raw_output,
+            success,
+            host=ctx.host,
+            port=ctx.port,
+            service=ctx.service,
+        )
 
         return ToolRunOutcome(
             command=command_str,
@@ -155,10 +128,14 @@ def _run_subprocess(
         return ToolRunOutcome(
             command=command_str,
             raw_output=raw or f"timeout after {timeout}s",
-            parsed_result={
-                "status": "failed",
-                "error": "timeout",
-            },
+            parsed_result=_parse_output(
+                ctx.tool_name,
+                raw or f"timeout after {timeout}s",
+                success=False,
+                host=ctx.host,
+                port=ctx.port,
+                service=ctx.service,
+            ),
             success=False,
             status="failed",
             error_message=f"timeout after {timeout}s",
@@ -168,10 +145,14 @@ def _run_subprocess(
         return ToolRunOutcome(
             command=command_str,
             raw_output=str(exc),
-            parsed_result={
-                "status": "failed",
-                "error": "not_found",
-            },
+            parsed_result=_parse_output(
+                ctx.tool_name,
+                str(exc),
+                success=False,
+                host=ctx.host,
+                port=ctx.port,
+                service=ctx.service,
+            ),
             success=False,
             status="failed",
             error_message=str(exc),
@@ -197,5 +178,5 @@ async def run_tool(
         argv,
         rendered_command,
         timeout,
-        ctx.tool_name,
+        ctx,
     )

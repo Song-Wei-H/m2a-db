@@ -26,7 +26,7 @@ def validate_task_execution(
 
     Template existence and enabled-state validation are handled by:
     - worker/task_poller.py
-    - worker/template_governance.py
+    - CommandTemplate lookup in the active worker path
     - CommandTemplate.enabled
     """
 

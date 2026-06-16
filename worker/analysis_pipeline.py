@@ -8,15 +8,15 @@ from typing import Any
 from sqlalchemy import select
 
 from app.database import async_session
-from app.models import DecisionScore, EvidenceConfidence, LearningFeedback, OpenPort, ToolTask
+from app.models import AutoLoopDecision, DecisionScore, EvidenceConfidence, OpenPort, Target, ToolTask
 from worker.confidence_scoring import calculate_confidence
 from worker.cve_enrichment import summarize_cve_risk
 from worker.evidence_normalizer import normalize_tool_result
-from worker.learning_engine import get_learning_feedback
+from worker.learning_engine import get_learning_feedback, record_learning_feedback
 from worker.mitre_mapper import map_to_mitre
-from worker.risk_engine_v3 import calculate_risk_v3
-from worker.task_generator import generate_tool_task
+from worker.risk_engine_v3 import calculate_risk
 from worker.tool_name_normalizer import normalize_tool_name
+from worker.auto_loop import get_next_tool_task
 
 __all__ = ["analyze_tool_result_and_generate_task"]
 
@@ -102,6 +102,10 @@ async def _generate_tasks_from_nmap_open_ports(target_id: int) -> list[dict[str,
     results: list[dict[str, Any]] = []
 
     async with async_session() as db, db.begin():
+        target = await db.get(Target, target_id)
+        if target is None:
+            return [{"generated": False, "reason": "Target not found", "target_id": target_id}]
+
         ports = list(
             (
                 await db.execute(
@@ -128,7 +132,7 @@ async def _generate_tasks_from_nmap_open_ports(target_id: int) -> list[dict[str,
                 "nmap_service",
             )
 
-            risk_v3 = calculate_risk_v3(
+            risk_v3 = calculate_risk(
                 target_id=target_id,
                 open_port_id=port.id,
                 service=port.service,
@@ -226,7 +230,38 @@ async def _generate_tasks_from_nmap_open_ports(target_id: int) -> list[dict[str,
 
             next_tool = risk_v3.next_tool
 
+            current_round = target.current_round or 1
+            max_round = target.max_round or 5
+            if current_round >= max_round:
+                db.add(
+                    AutoLoopDecision(
+                        target_id=target_id,
+                        round_number=current_round,
+                        stop_reason="max_round_reached",
+                        next_tool=next_tool,
+                    )
+                )
+                results.append(
+                    {
+                        "generated": False,
+                        "reason": "max_round_reached",
+                        "open_port_id": port.id,
+                        "port": port.port,
+                        "service": port.service,
+                        "decision_score_id": decision.id,
+                    }
+                )
+                continue
+
             if not next_tool:
+                db.add(
+                    AutoLoopDecision(
+                        target_id=target_id,
+                        round_number=current_round,
+                        stop_reason="no_next_tool",
+                        next_tool=None,
+                    )
+                )
                 results.append(
                     {
                         "generated": False,
@@ -247,6 +282,14 @@ async def _generate_tasks_from_nmap_open_ports(target_id: int) -> list[dict[str,
             )
 
             if exists:
+                db.add(
+                    AutoLoopDecision(
+                        target_id=target_id,
+                        round_number=current_round,
+                        stop_reason="duplicate_tool",
+                        next_tool=next_tool,
+                    )
+                )
                 results.append(
                     {
                         "generated": False,
@@ -310,8 +353,13 @@ async def analyze_tool_result_and_generate_task(
 
     if tool_name == "nuclei_safe":
         finding_count = int(parsed_output.get("finding_count") or 0)
+        nuclei_completed_successfully = (
+            parsed_output.get("success") is not False
+            and parsed_output.get("parser_success") is not False
+            and parsed_output.get("status") != "failed"
+        )
 
-        if finding_count == 0:
+        if finding_count == 0 and nuclei_completed_successfully:
             port_row = None
             cve_summary = None
 
@@ -329,7 +377,7 @@ async def analyze_tool_result_and_generate_task(
                     tool_name,
                 )
 
-            risk_v3 = calculate_risk_v3(
+            risk_v3 = calculate_risk(
                 target_id=target_id,
                 open_port_id=open_port_id,
                 service=port_row.service if port_row else None,
@@ -359,20 +407,20 @@ async def analyze_tool_result_and_generate_task(
                 )
                 db.add(evidence_confidence)
 
-                db.add(
-                    LearningFeedback(
-                        decision_id=None,
-                        tool_result_id=tool_result_id,
-                        tool_name=tool_name,
-                        evidence_type="vulnerability_scan_negative",
-                        recommended_action="verify",
-                        was_success=True,
-                        success=True,
-                        confidence_delta=0,
-                        learning_score=feedback["success_rate"] if feedback else 0.5,
-                        reason="nuclei_safe completed with no findings",
-                        feedback="nuclei_safe completed successfully but found no vulnerability",
-                    )
+                await record_learning_feedback(
+                    session=db,
+                    decision_id=decision_score_id,
+                    tool_result_id=tool_result_id,
+                    tool_name=tool_name,
+                    service=port_row.service if port_row else None,
+                    evidence_type="vulnerability_scan_negative",
+                    recommended_action="verify",
+                    success=True,
+                    was_success=True,
+                    confidence_delta=0,
+                    learning_score=0.8,
+                    reason="nuclei_safe completed with no findings",
+                    feedback="nuclei_safe completed successfully but found no vulnerability",
                 )
 
                 decision = DecisionScore(
@@ -418,6 +466,39 @@ async def analyze_tool_result_and_generate_task(
 
                 new_decision_score_id = decision.id
 
+            # Create decision result for auto loop
+            decision_result = {
+                "recommended_tool": risk_v3.next_tool,
+                "recommended_action": risk_v3.next_action,
+                "decision_score_id": new_decision_score_id,
+                "priority": (
+                    100 if risk_v3.severity == "critical"
+                    else 80 if risk_v3.severity == "high"
+                    else 50 if risk_v3.severity == "medium"
+                    else 10
+                ),
+                "requires_approval": risk_v3.next_action
+                in {"verify", "remediate"},
+                "risk_score": risk_v3.risk_score,
+                "risk_factors": {
+                    "base_risk_score": risk_v3.base_risk_score,
+                    "adjusted_risk_score": risk_v3.adjusted_risk_score,
+                    "confidence_score": risk_v3.confidence_score,
+                    "learning_adjustment": risk_v3.learning_adjustment,
+                    "runtime_adjustment": risk_v3.runtime_adjustment,
+                    "evidence_adjustment": risk_v3.evidence_adjustment,
+                    "waf_detected": risk_v3.waf_detected,
+                    "tool_blocked": risk_v3.tool_blocked,
+                    "tool_timeout": risk_v3.tool_timeout,
+                },
+                "reasoning": risk_v3.reasoning,
+            }
+
+            # Integrate auto loop functionality after DecisionScore is created
+            task_result = await get_next_tool_task(
+                target_id=target_id, open_port_id=open_port_id, decision_result=decision_result
+            )
+
             return [
                 {
                     "generated": False,
@@ -425,6 +506,7 @@ async def analyze_tool_result_and_generate_task(
                     "tool_result_id": tool_result_id,
                     "decision_score_id": new_decision_score_id,
                     "evidence_type": "vulnerability_scan_negative",
+                    "task_result": task_result,
                 }
             ]
 
@@ -436,6 +518,65 @@ async def analyze_tool_result_and_generate_task(
         tool_result_id=tool_result_id,
     )
 
+    if not evidence_list:
+        async with async_session() as db, db.begin():
+            decision = DecisionScore(
+                target_id=target_id,
+                open_port_id=open_port_id,
+                risk_score=0.0,
+                base_risk_score=0.0,
+                adjusted_risk_score=0.0,
+                confidence_score=0.0,
+                learning_adjustment=0.0,
+                runtime_adjustment=0.0,
+                evidence_adjustment=0.0,
+                waf_detected=False,
+                tool_blocked=False,
+                tool_timeout=False,
+                severity="info",
+                confidence=0.0,
+                next_action="stop",
+                next_tool=None,
+                mitre_phase=None,
+                mitre_technique=None,
+                reason=f"{tool_name} produced no normalized evidence; stopping auto loop",
+                reasoning=["No normalized evidence was produced by the parser/normalizer"],
+                input_snapshot={
+                    "stage": "no_normalized_evidence",
+                    "tool_name": tool_name,
+                    "tool_result_id": tool_result_id,
+                    "previous_decision_score_id": decision_score_id,
+                    "parsed_output": parsed_output,
+                },
+            )
+            db.add(decision)
+            await db.flush()
+            new_decision_score_id = decision.id
+
+        task_result = await get_next_tool_task(
+            target_id=target_id,
+            open_port_id=open_port_id,
+            decision_result={
+                "recommended_tool": None,
+                "recommended_action": "stop",
+                "decision_score_id": new_decision_score_id,
+                "priority": 0,
+                "requires_approval": False,
+                "risk_score": 0.0,
+                "reasoning": ["No normalized evidence was produced by the parser/normalizer"],
+            },
+        )
+
+        return [
+            {
+                "generated": False,
+                "reason": "No normalized evidence; stop decision created",
+                "tool_result_id": tool_result_id,
+                "decision_score_id": new_decision_score_id,
+                "task_result": task_result,
+            }
+        ]
+
     for evidence in evidence_list:
         mitre_mapping = map_to_mitre(evidence)
 
@@ -445,23 +586,43 @@ async def analyze_tool_result_and_generate_task(
         )
 
         details = evidence.get("details") or {}
+        cve_summary = None
 
         async with async_session() as db:
             feedback = await get_learning_feedback(
                 db,
                 tool_name,
             )
+            if open_port_id is not None:
+                cve_summary = await summarize_cve_risk(
+                    db,
+                    target_id=target_id,
+                    open_port_id=open_port_id,
+                )
 
-        risk_v3 = calculate_risk_v3(
+        risk_parsed_output = dict(parsed_output)
+        if cve_summary is not None:
+            risk_parsed_output["cve_summary"] = {
+                "score": cve_summary.total_score,
+                "best_cve": cve_summary.best_cve,
+                "max_cvss": cve_summary.max_cvss,
+                "max_epss": cve_summary.max_epss,
+                "has_kev": cve_summary.has_kev,
+                "cve_count": cve_summary.cve_count,
+                "best_match_type": cve_summary.best_match_type,
+                "best_match_confidence": cve_summary.best_match_confidence,
+            }
+
+        risk_v3 = calculate_risk(
             target_id=target_id,
             open_port_id=open_port_id,
             service=details.get("service") or evidence.get("service"),
             port=details.get("port") or evidence.get("port"),
-            cvss=details.get("cvss") or details.get("cvss_score"),
-            epss=details.get("epss") or details.get("epss_score"),
-            kev=bool(details.get("kev") or details.get("is_kev")),
+            cvss=(cve_summary.max_cvss if cve_summary else None) or details.get("cvss") or details.get("cvss_score"),
+            epss=(cve_summary.max_epss if cve_summary else None) or details.get("epss") or details.get("epss_score"),
+            kev=bool((cve_summary.has_kev if cve_summary else False) or details.get("kev") or details.get("is_kev")),
             tool_name=tool_name,
-            parsed_output=parsed_output,
+            parsed_output=risk_parsed_output,
             raw_output=raw_output,
             base_confidence=confidence_result.get("confidence_score", 0.7),
             learning_feedback=feedback,
@@ -559,7 +720,7 @@ async def analyze_tool_result_and_generate_task(
                     "evidence": evidence,
                     "mitre_mapping": mitre_mapping,
                     "confidence_result": confidence_result,
-                    "parsed_output": parsed_output,
+                    "parsed_output": risk_parsed_output,
                 },
             )
 
@@ -567,12 +728,13 @@ async def analyze_tool_result_and_generate_task(
             await db.flush()
 
             new_decision_score_id = decision.id
+            decision_result["decision_score_id"] = new_decision_score_id
 
-        task_result = await generate_tool_task(
-            target_id=target_id,
-            open_port_id=open_port_id,
-            decision_result=decision_result,
-            decision_score_id=new_decision_score_id,
+        # Generate the next governed task after the DecisionScore transaction
+        # commits; get_next_tool_task uses a separate session and must see the
+        # referenced decision row before inserting ToolTask.decision_score_id.
+        task_result = await get_next_tool_task(
+            target_id=target_id, open_port_id=open_port_id, decision_result=decision_result
         )
 
         results.append(

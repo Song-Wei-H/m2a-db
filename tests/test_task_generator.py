@@ -4,6 +4,34 @@ from worker.task_generator import generate_tool_task, _existing_tool_task
 from app.models import ToolTask
 
 
+class FakeAsyncSessionContext:
+    def __init__(self, session):
+        self.session = session
+
+    async def __aenter__(self):
+        return self.session
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class FakeScalarResult:
+    def __init__(self, value=None):
+        self.value = value
+
+    def scalar_one_or_none(self):
+        return self.value
+
+
+def make_session(result=None):
+    session = MagicMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    session.execute = AsyncMock(return_value=FakeScalarResult(result))
+    session.begin = MagicMock(return_value=FakeAsyncSessionContext(session))
+    return session
+
+
 @pytest.mark.asyncio
 async def test_duplicate_pending_task():
     """Test that duplicate pending tasks are correctly detected and skipped"""
@@ -111,7 +139,7 @@ async def test_alias_duplicate_detection():
 @pytest.mark.asyncio
 async def test_failed_task_recreation():
     """Test that failed tasks can be recreated"""
-    with patch("worker.task_generator._existing_tool_task") as mock_existing, \
+    with patch("worker.task_generator._existing_tool_task", new_callable=AsyncMock) as mock_existing, \
          patch("worker.task_generator._get_tool_registry", new_callable=AsyncMock) as mock_get_registry, \
          patch("worker.task_generator.create_tool_request", new_callable=AsyncMock) as mock_request:
 
@@ -121,7 +149,8 @@ async def test_failed_task_recreation():
         
         # Mock the database session and task creation
         with patch("worker.task_generator.async_session") as mock_session:
-            mock_session.return_value.__aenter__.return_value = MagicMock()
+            session = make_session()
+            mock_session.return_value = FakeAsyncSessionContext(session)
             
             result = await generate_tool_task(
                 target_id=1,
@@ -134,30 +163,52 @@ async def test_failed_task_recreation():
             
             # Check that a new task was created
             assert result["action"] == "tool_task_created"
+            assert result["approval_status"] == "not_required"
 
 
 @pytest.mark.asyncio
 async def test_null_open_port_handling():
     """Test that open_port_id = NULL is handled correctly"""
-    with patch("worker.task_generator._existing_tool_task", new_callable=AsyncMock) as mock_existing, \
-         patch("worker.task_generator._get_tool_registry", new_callable=AsyncMock) as mock_get_registry, \
-         patch("worker.task_generator.create_tool_request", new_callable=AsyncMock) as mock_request:
-
-        # Test with open_port_id = None
-        mock_existing.return_value = None
-        mock_get_registry.return_value = MagicMock(approval_required=False)
-        
+    with patch("worker.task_generator.async_session") as mock_session:
+        session = make_session(result=None)
+        mock_session.return_value = FakeAsyncSessionContext(session)
         result = await _existing_tool_task(1, None, "httpx_basic")
-        # The function should handle NULL correctly
-        # Note: This test is checking the function behavior with NULL values
+        assert result is None
+        session.execute.assert_awaited_once()
 
 
-@pytest.mark.async_io
+@pytest.mark.asyncio
 async def test_concurrent_creation_scenario():
     """Test concurrent creation scenario"""
     # This would require a more complex test setup to simulate concurrency
     # For now, we'll trust that the implementation handles it correctly
     pass
+
+
+@pytest.mark.asyncio
+async def test_depth_tool_created_with_pending_approval_status():
+    with patch("worker.task_generator._existing_tool_task", new_callable=AsyncMock) as mock_existing, \
+         patch("worker.task_generator._get_tool_registry", new_callable=AsyncMock) as mock_get_registry:
+        mock_existing.return_value = None
+        mock_get_registry.return_value = MagicMock(approval_required=True)
+
+        with patch("worker.task_generator.async_session") as mock_session:
+            session = make_session()
+            mock_session.return_value = FakeAsyncSessionContext(session)
+
+            result = await generate_tool_task(
+                target_id=1,
+                open_port_id=104,
+                decision_result={
+                    "recommended_tool": "nuclei",
+                    "recommended_action": "verify",
+                    "requires_approval": True,
+                },
+            )
+
+    assert result["action"] == "tool_task_created"
+    assert result["approval_required"] is True
+    assert result["approval_status"] == "pending_approval"
 
 
 if __name__ == "__main__":

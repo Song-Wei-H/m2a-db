@@ -6,10 +6,51 @@ from worker.analysis_pipeline import analyze_tool_result_and_generate_task, _exi
 from app.models import ToolTask
 
 
+class FakeAsyncSessionContext:
+    def __init__(self, session):
+        self.session = session
+
+    async def __aenter__(self):
+        return self.session
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class FakeScalarResult:
+    def __init__(self, value=None):
+        self.value = value
+
+    def scalar_one_or_none(self):
+        return self.value
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        if self.value is None:
+            return []
+        if isinstance(self.value, list):
+            return self.value
+        return [self.value]
+
+
+def make_fake_session():
+    session = MagicMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    session.get = AsyncMock(return_value=None)
+    session.execute = AsyncMock(return_value=FakeScalarResult())
+    session.begin = MagicMock(return_value=FakeAsyncSessionContext(session))
+    return session
+
+
 @pytest.mark.asyncio
 async def test_analysis_pipeline_httpx_basic_semantics():
     # Mock database dependencies to avoid real DB connections
-    with patch("worker.analysis_pipeline.generate_tool_task", new_callable=AsyncMock) as mock_generate, \
+    fake_session = make_fake_session()
+    with patch("worker.analysis_pipeline.get_next_tool_task", new_callable=AsyncMock) as mock_generate, \
+         patch("worker.analysis_pipeline.async_session", return_value=FakeAsyncSessionContext(fake_session)), \
          patch("worker.analysis_pipeline.get_learning_feedback", new_callable=AsyncMock) as mock_feedback, \
          patch("worker.analysis_pipeline.summarize_cve_risk", new_callable=AsyncMock) as mock_cve:
         
@@ -77,7 +118,9 @@ async def test_analysis_pipeline_httpx_basic_semantics():
 @pytest.mark.asyncio
 async def test_decision_engine_remediate_kev():
     """Test that KEV detection results in remediate action"""
-    with patch("worker.analysis_pipeline.generate_tool_task", new_callable=AsyncMock) as mock_generate, \
+    fake_session = make_fake_session()
+    with patch("worker.analysis_pipeline.get_next_tool_task", new_callable=AsyncMock) as mock_generate, \
+         patch("worker.analysis_pipeline.async_session", return_value=FakeAsyncSessionContext(fake_session)), \
          patch("worker.analysis_pipeline.get_learning_feedback", new_callable=AsyncMock) as mock_feedback, \
          patch("worker.analysis_pipeline.summarize_cve_risk", new_callable=AsyncMock) as mock_cve:
         
@@ -124,7 +167,9 @@ async def test_decision_engine_remediate_kev():
 @pytest.mark.asyncio
 async def test_decision_engine_verify_high_risk():
     """Test verify action for high risk scenarios"""
-    with patch("worker.analysis_pipeline.generate_tool_task", new_callable=AsyncMock) as mock_generate, \
+    fake_session = make_fake_session()
+    with patch("worker.analysis_pipeline.get_next_tool_task", new_callable=AsyncMock) as mock_generate, \
+         patch("worker.analysis_pipeline.async_session", return_value=FakeAsyncSessionContext(fake_session)), \
          patch("worker.analysis_pipeline.get_learning_feedback", new_callable=AsyncMock) as mock_feedback, \
          patch("worker.analysis_pipeline.summarize_cve_risk", new_callable=AsyncMock) as mock_cve:
         
@@ -170,7 +215,9 @@ async def test_decision_engine_verify_high_risk():
 @pytest.mark.asyncio
 async def test_decision_engine_stop_no_tool():
     """Test stop action when no tool is available"""
-    with patch("worker.analysis_pipeline.generate_tool_task", new_callable=AsyncMock) as mock_generate, \
+    fake_session = make_fake_session()
+    with patch("worker.analysis_pipeline.get_next_tool_task", new_callable=AsyncMock) as mock_generate, \
+         patch("worker.analysis_pipeline.async_session", return_value=FakeAsyncSessionContext(fake_session)), \
          patch("worker.analysis_pipeline.get_learning_feedback", new_callable=AsyncMock) as mock_feedback, \
          patch("worker.analysis_pipeline.summarize_cve_risk", new_callable=AsyncMock) as mock_cve:
         
@@ -217,7 +264,9 @@ async def test_decision_engine_stop_no_tool():
 async def test_analysis_pipeline_decision_consistency():
     """Test that the analysis pipeline properly uses the runtime risk engine"""
     # Mock database dependencies to avoid real DB connections
-    with patch("worker.analysis_pipeline.generate_tool_task", new_callable=AsyncMock) as mock_generate, \
+    fake_session = make_fake_session()
+    with patch("worker.analysis_pipeline.get_next_tool_task", new_callable=AsyncMock) as mock_generate, \
+         patch("worker.analysis_pipeline.async_session", return_value=FakeAsyncSessionContext(fake_session)), \
          patch("worker.analysis_pipeline.get_learning_feedback", new_callable=AsyncMock) as mock_feedback, \
          patch("worker.analysis_pipeline.summarize_cve_risk", new_callable=AsyncMock) as mock_cve:
         
@@ -282,7 +331,7 @@ async def test_analysis_pipeline_decision_consistency():
         
         # Verify decision engine recommendation
         assert result["decision_result"]["recommended_tool"] == "nuclei_safe"
-        assert result["decision_result"]["recommended_action"] == "verify"
+        assert result["decision_result"]["recommended_action"] == "continue"
         
         # Verify task generation was called
         mock_generate.assert_awaited_once()
@@ -292,14 +341,15 @@ async def test_analysis_pipeline_decision_consistency():
 async def test_duplicate_tool_task_prevention():
     """Test that duplicate ToolTask generation is properly prevented"""
     # Mock the database and dependencies
-    with patch("worker.analysis_pipeline._existing_tool_task", new_callable=AsyncMock) as mock_existing, \
-         patch("worker.analysis_pipeline.generate_tool_task", new_callable=AsyncMock) as mock_generate:
+    fake_session = make_fake_session()
+    with patch("worker.analysis_pipeline.get_next_tool_task", new_callable=AsyncMock) as mock_generate, \
+         patch("worker.analysis_pipeline.async_session", return_value=FakeAsyncSessionContext(fake_session)), \
+         patch("worker.analysis_pipeline.get_learning_feedback", new_callable=AsyncMock) as mock_feedback:
+        mock_feedback.return_value = {"success_rate": 0.85, "false_positive_rate": 0.1}
         
         # Mock that a task already exists
         existing_task = MagicMock()
         existing_task.id = 123
-        mock_existing.return_value = existing_task
-        
         # Mock the task generation to return our existing task
         mock_generate.return_value = {
             "action": "skipped_duplicate",
@@ -334,14 +384,15 @@ async def test_duplicate_tool_task_prevention():
 async def test_duplicate_tool_task_prevention_with_normalization():
     """Test that tool name normalization works with duplicate checking"""
     # Mock the database and dependencies
-    with patch("worker.analysis_pipeline._existing_tool_task", new_callable=AsyncMock) as mock_existing, \
-         patch("worker.analysis_pipeline.generate_tool_task", new_callable=AsyncMock) as mock_generate:
+    fake_session = make_fake_session()
+    with patch("worker.analysis_pipeline.get_next_tool_task", new_callable=AsyncMock) as mock_generate, \
+         patch("worker.analysis_pipeline.async_session", return_value=FakeAsyncSessionContext(fake_session)), \
+         patch("worker.analysis_pipeline.get_learning_feedback", new_callable=AsyncMock) as mock_feedback:
+        mock_feedback.return_value = {"success_rate": 0.85, "false_positive_rate": 0.1}
         
         # Mock that a task already exists with normalized tool name
         existing_task = MagicMock()
         existing_task.id = 124
-        mock_existing.return_value = existing_task
-        
         # Mock the task generation to return our existing task
         mock_generate.return_value = {
             "action": "skipped_duplicate",
@@ -370,3 +421,49 @@ async def test_duplicate_tool_task_prevention_with_normalization():
         assert result["task_result"]["action"] == "skipped_duplicate"
         assert result["task_result"]["tool_name"] == "httpx_basic"  # Normalized name
         assert result["task_result"]["existing_task_id"] == 124
+
+
+@pytest.mark.asyncio
+async def test_analysis_pipeline_creates_stop_decision_when_no_normalized_evidence():
+    fake_session = make_fake_session()
+    added_rows = []
+
+    def add_row(row):
+        added_rows.append(row)
+
+    async def flush_rows():
+        for index, row in enumerate(added_rows, start=200):
+            if getattr(row, "id", None) is None:
+                row.id = index
+
+    fake_session.add.side_effect = add_row
+    fake_session.flush.side_effect = flush_rows
+
+    with patch("worker.analysis_pipeline.normalize_tool_result", return_value=[]), \
+         patch("worker.analysis_pipeline.get_next_tool_task", new_callable=AsyncMock) as mock_next, \
+         patch("worker.analysis_pipeline.async_session", return_value=FakeAsyncSessionContext(fake_session)):
+        mock_next.return_value = {
+            "action": "stop",
+            "stop_reason": "no_next_tool",
+            "target_completed": True,
+        }
+
+        results = await analyze_tool_result_and_generate_task(
+            target_id=17,
+            open_port_id=21,
+            tool_name="httpx_basic",
+            parsed_output={"tool_name": "httpx_basic", "success": True},
+            raw_output="",
+            tool_result_id=300,
+            decision_score_id=199,
+        )
+
+    assert len(results) == 1
+    decision = added_rows[0]
+    assert decision.next_action == "stop"
+    assert decision.next_tool is None
+    assert decision.reason == "httpx_basic produced no normalized evidence; stopping auto loop"
+    mock_next.assert_awaited_once()
+    assert mock_next.await_args.kwargs["decision_result"]["recommended_action"] == "stop"
+    assert mock_next.await_args.kwargs["decision_result"]["recommended_tool"] is None
+    assert results[0]["task_result"]["target_completed"] is True

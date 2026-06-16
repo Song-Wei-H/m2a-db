@@ -8,6 +8,7 @@ operations, or command generation.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlparse
 
 Evidence = dict[str, Any]
 
@@ -103,6 +104,10 @@ def _httpx_normalize(
 ) -> list[Evidence]:
     evidence_list: list[Evidence] = []
     for status_code, url in _httpx_items(parsed_output):
+        parsed_url = urlparse(url) if url else None
+        inferred_port = parsed_url.port if parsed_url else None
+        if inferred_port is None and parsed_url:
+            inferred_port = 443 if parsed_url.scheme == "https" else 80
         evidence = _base_evidence(
             tool_name="httpx_basic",
             evidence_type="http_service",
@@ -111,9 +116,13 @@ def _httpx_normalize(
             tool_result_id=tool_result_id,
             confidence=0.90,
         )
+        evidence["service"] = evidence.get("service") or "http"
+        evidence["port"] = evidence.get("port") or inferred_port
         evidence["details"].update({
             "status_code": status_code,
             "url": url,
+            "service": evidence["service"],
+            "port": evidence["port"],
             "exposed": 200 <= status_code <= 399,
         })
         evidence_list.append(evidence)
@@ -134,6 +143,8 @@ def _nuclei_normalize(
     findings = parsed_output.get("findings") or []
     if not isinstance(findings, list):
         findings = []
+    if not findings and int(parsed_output.get("finding_count") or 0) > 0:
+        findings = [parsed_output]
     for finding in findings:
         if not isinstance(finding, dict):
             continue
@@ -150,6 +161,10 @@ def _nuclei_normalize(
             "template_id": finding.get("id") or finding.get("template_id"),
             "name": finding.get("name"),
             "severity": severity,
+            "cve": finding.get("cve"),
+            "kev": finding.get("kev") or finding.get("is_kev"),
+            "cvss": finding.get("cvss") or finding.get("cvss_score"),
+            "epss": finding.get("epss") or finding.get("epss_score"),
             "finding": finding.get("finding") or finding.get("description") or finding.get("matched-at"),
         })
         evidence_list.append(evidence)

@@ -196,7 +196,7 @@ The following processes are designed to run persistently. Do not start duplicate
 | Process            |          Default Port | Description                          |
 | ------------------ | --------------------: | ------------------------------------ |
 | FastAPI / uvicorn  | 8000 or fallback 8001 | API service                          |
-| dispatcher.py      |                  none | Polls PostgreSQL and dispatches work |
+| scan_run_dispatcher.py |              none | Creates initial nmap ToolTask records |
 | Kali Worker        |                  9001 | Worker host for tool execution       |
 | worker.task_poller |                  none | Polls pending ToolTask records       |
 
@@ -283,8 +283,10 @@ Manual fallback:
 Run only one instance:
 
 ```powershell
-.\.venv\Scripts\python dispatcher.py
+.\.venv\Scripts\python scan_run_dispatcher.py
 ```
+
+Legacy `dispatcher.py` has been archived under `_archive/legacy_unused/`.
 
 ### Terminal 3 — Worker Task Poller
 
@@ -574,7 +576,7 @@ Implemented components:
 worker/evidence_normalizer.py
 worker/mitre_mapper.py
 worker/confidence_scoring.py
-worker/decision_engine.py
+worker/risk_engine_v3.py
 worker/analysis_pipeline.py
 worker/task_generator.py
 ```

@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS learning_feedback (
     id SERIAL PRIMARY KEY,
-    decision_id INT,
+    decision_id INT REFERENCES decision_scores(id) ON DELETE SET NULL,
     tool_result_id INT,
     tool_name VARCHAR(100) NOT NULL,
     service VARCHAR(50),
@@ -29,3 +29,21 @@ ALTER TABLE learning_feedback ADD COLUMN IF NOT EXISTS success BOOLEAN;
 ALTER TABLE learning_feedback ADD COLUMN IF NOT EXISTS learning_score NUMERIC(3,1) NOT NULL DEFAULT 0.0;
 ALTER TABLE learning_feedback ADD COLUMN IF NOT EXISTS reason TEXT;
 ALTER TABLE learning_feedback ADD COLUMN IF NOT EXISTS feedback TEXT;
+
+ALTER TABLE learning_feedback
+    DROP CONSTRAINT IF EXISTS learning_feedback_decision_id_fkey;
+
+UPDATE learning_feedback
+SET decision_id = NULL
+WHERE decision_id IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM decision_scores
+      WHERE decision_scores.id = learning_feedback.decision_id
+  );
+
+ALTER TABLE learning_feedback
+    ADD CONSTRAINT learning_feedback_decision_id_fkey
+    FOREIGN KEY (decision_id)
+    REFERENCES decision_scores(id)
+    ON DELETE SET NULL;

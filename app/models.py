@@ -1,6 +1,9 @@
 from datetime import datetime
+from typing import List
 
 from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, func
+from sqlalchemy import ForeignKey
+from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -17,10 +20,14 @@ class Target(Base):
     target_type: Mapped[str | None] = mapped_column(String(50))
     scope: Mapped[str | None] = mapped_column(String(50))
     status: Mapped[str] = mapped_column(String(50), server_default="pending")
+    current_round: Mapped[int] = mapped_column(Integer, default=1)
+    max_round: Mapped[int] = mapped_column(Integer, default=5)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),
         server_default=func.now(),
     )
+    # Relationship to auto loop decisions
+    auto_loop_decisions: Mapped[List["AutoLoopDecision"]] = relationship("AutoLoopDecision", back_populates="target")
 
 class ToolRegistry(Base):
     __tablename__ = "tool_registry"
@@ -169,10 +176,51 @@ class ToolResult(Base):
         server_default=func.now(),
     )
 
+class ToolTask(Base):
+    __tablename__ = "tool_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), server_default="pending")
+    priority: Mapped[int] = mapped_column(Integer, default=5)
+    reject_reason: Mapped[str | None] = mapped_column(Text)
+
+    approval_status: Mapped[str] = mapped_column(
+        String(50), nullable=False, server_default="not_required"
+    )
+    approval_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    approval_reason: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False),
+        server_default=func.now(),
+    )
+    target_id: Mapped[int] = mapped_column(Integer)
+    open_port_id: Mapped[int] = mapped_column(Integer)
+    tool_run: Mapped[str] = mapped_column(String(100))
+    decision_score_id: Mapped[int] = mapped_column(Integer)
+
+class AutoLoopDecision(Base):
+    __tablename__ = "auto_loop_decisions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_id: Mapped[int] = mapped_column(Integer, ForeignKey("targets.id"), nullable=False)
+    round_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    stop_reason: Mapped[str] = mapped_column(String(50), nullable=True)
+    next_tool: Mapped[str | None] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), server_default=func.now())
+
+    target: Mapped["Target"] = relationship("Target", back_populates="auto_loop_decisions")
+
 class LearningFeedback(Base):
     __tablename__ = "learning_feedback"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    decision_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    decision_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("decision_scores.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     tool_result_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
     service: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -181,7 +229,7 @@ class LearningFeedback(Base):
     success: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     learning_score: Mapped[float] = mapped_column(Float, nullable=False)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    feedback: Mapped[str |  None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), server_default=func.now())
 
 class Vulnerability(Base):
@@ -345,33 +393,6 @@ class LlmRecommendation(Base):
     validator_reason: Mapped[str | None] = mapped_column(
         Text
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=False),
-        server_default=func.now(),
-    )
-
-
-class ToolTask(Base):
-    __tablename__ = "tool_tasks"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    target_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    open_port_id: Mapped[int | None] = mapped_column(Integer)
-    decision_score_id: Mapped[int | None] = mapped_column(Integer)
-    tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    status: Mapped[str] = mapped_column(String(50), server_default="pending")
-    priority: Mapped[int] = mapped_column(Integer, default=5)
-    reject_reason: Mapped[str | None] = mapped_column(Text)
-
-    approval_status: Mapped[str] = mapped_column(
-        String(50), nullable=False, server_default="not_required"
-    )
-    approval_required: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="false"
-    )
-    approval_reason: Mapped[str | None] = mapped_column(Text)
-
-
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),
         server_default=func.now(),

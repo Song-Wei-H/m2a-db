@@ -214,6 +214,10 @@ def calculate_evidence_adjustment(
 
     elif tool_name == "httpx_basic":
         status_code = parsed_output.get("status_code")
+        if status_code is None:
+            status_codes = parsed_output.get("status_codes")
+            if isinstance(status_codes, list) and status_codes:
+                status_code = status_codes[0]
 
         if isinstance(status_code, int):
             if status_code >= 500:
@@ -237,6 +241,16 @@ def calculate_evidence_adjustment(
             reasoning.append("dirb found no paths; small risk reduction only")
 
     return round(adjustment, 2), reasoning
+
+
+def _first_http_status(parsed_output: dict[str, Any]) -> int | None:
+    status_code = parsed_output.get("status_code")
+    if isinstance(status_code, int):
+        return status_code
+    status_codes = parsed_output.get("status_codes")
+    if isinstance(status_codes, list) and status_codes and isinstance(status_codes[0], int):
+        return status_codes[0]
+    return None
 
 
 def calculate_learning_adjustment(
@@ -409,6 +423,9 @@ def calculate_risk_v21(
         port=port,
         adjusted_risk_score=adjusted_risk_score,
     )
+    http_status = _first_http_status(parsed_output)
+    if tool_name == "httpx_basic" and next_tool == "httpx_basic":
+        next_tool = "nuclei_safe"
 
     next_action = decide_next_action(
         base_risk_score=base_risk_score,
@@ -423,6 +440,8 @@ def calculate_risk_v21(
         max_epss=epss,
         cvss=cvss,
     )
+    if tool_name == "httpx_basic" and http_status is not None and http_status >= 500:
+        next_action = "verify"
 
     reasoning = [
         *r1,

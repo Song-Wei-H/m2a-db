@@ -17,6 +17,8 @@ from worker.parsers.nmap_parser import parse_nmap_output
 from worker.tool_runner import TaskContext, run_tool
 from worker.safety import validate_task_execution
 from worker.analysis_pipeline import analyze_tool_result_and_generate_task
+from worker.auto_loop import finalize_target_if_idle, increment_target_round
+from worker.cve_matcher import match_cves_for_target
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,7 @@ class TaskSnapshot:
     id: int
     target_id: int
     open_port_id: int | None
+    decision_score_id: int | None
     tool_name: str
     approval_required: bool
     approval_status: str
@@ -99,10 +102,27 @@ async def _persist_result(db: AsyncSession, ctx: TaskContext, outcome) -> int:
     )
     db.add(row)
     await db.flush()
+
+    if outcome.success and ctx.tool_name == "httpx_basic":
+        try:
+            await match_cves_for_target(
+                db,
+                target_id=ctx.target_id,
+                open_port_id=ctx.open_port_id,
+                parsed_output=outcome.parsed_result,
+            )
+        except Exception:
+            logger.exception("Failed to match CVEs for tool_result_id=%s", row.id)
     
     # Create learning feedback record
     try:
-        await create_learning_feedback(db, row)
+        await create_learning_feedback(
+            db,
+            row,
+            decision_id=ctx.decision_score_id,
+            service=ctx.service,
+            recommended_action="verify" if not outcome.success else None,
+        )
     except Exception:
         # Log but don't fail the main execution flow
         logger.exception("Failed to create learning feedback for tool_result_id=%s", row.id)
@@ -183,7 +203,7 @@ async def _fail_task(
         await db.execute(
             update(ToolTask)
             .where(ToolTask.id == snapshot.id)
-            .values(status="failed")
+            .values(status="failed", reject_reason=reason[:2000])
         )
 
         row = ToolResult(
@@ -198,15 +218,22 @@ async def _fail_task(
             evidence=reason,
         )
         db.add(row)
+        await db.flush()
         
         # Create learning feedback record
         try:
-            await create_learning_feedback(db, row)
+            await create_learning_feedback(
+                db,
+                row,
+                decision_id=snapshot.decision_score_id,
+                recommended_action="verify",
+            )
         except Exception:
             # Log but don't fail the main execution flow
             logger.exception("Failed to create learning feedback for tool_result_id=%s", row.id)
 
     logger.error("tool_task_id=%s failed: %s", snapshot.id, reason)
+    await finalize_target_if_idle(snapshot.target_id, stop_reason="task_failed")
 
 
 async def execute_task(task_id: int) -> None:
@@ -228,6 +255,7 @@ async def execute_task(task_id: int) -> None:
             id=task.id,
             target_id=task.target_id,
             open_port_id=task.open_port_id,
+            decision_score_id=task.decision_score_id,
             tool_name=task.tool_name,
             approval_required=task.approval_required,
             approval_status=task.approval_status,
@@ -317,6 +345,12 @@ async def execute_task(task_id: int) -> None:
         await _fail_task(task_snapshot, str(exc))
         return
 
+    except TimeoutError as exc:
+        reason = str(exc) or "remote tool timeout"
+        logger.exception("tool_task_id=%s execution timeout: %s", task_id, reason)
+        await _fail_task(task_snapshot, reason, command=f"remote:{ctx.tool_name}")
+        return
+
     except Exception as exc:
         logger.exception("tool_task_id=%s execution error: %s", task_id, exc)
         await _fail_task(task_snapshot, "execution error")
@@ -325,7 +359,12 @@ async def execute_task(task_id: int) -> None:
     async with async_session() as db, db.begin():
         result_id = await _persist_result(db, ctx, outcome)
 
+    # Auto loop integration
     try:
+        # Increment target round after successful task completion
+        await increment_target_round(ctx.target_id)
+        
+        # Continue with normal analysis pipeline
         await analyze_tool_result_and_generate_task(
             target_id=ctx.target_id,
             open_port_id=ctx.open_port_id,
@@ -336,12 +375,14 @@ async def execute_task(task_id: int) -> None:
             ctx=ctx,
             decision_score_id=ctx.decision_score_id,
         )
+        await finalize_target_if_idle(ctx.target_id)
     except Exception as exc:
         logger.exception(
             "tool_task_id=%s analysis pipeline failed: %s",
             ctx.task_id,
             exc,
         )
+        await finalize_target_if_idle(ctx.target_id, stop_reason="analysis_failed")
 
     logger.info(
         "tool_task_id=%s finished status=%s tool_result_id=%s",

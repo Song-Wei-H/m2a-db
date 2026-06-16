@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 
 from app.config import settings
-from worker.parsers.httpx_parser import parse_httpx_output
+from worker.parsers.tool_result_parser import parse_tool_output
 from worker.tool_runner import TaskContext, ToolRunOutcome
 
 
@@ -19,9 +19,16 @@ async def run_remote_tool(ctx: TaskContext) -> ToolRunOutcome:
     }
 
     async with httpx.AsyncClient(
-        timeout=settings.worker_tool_timeout_seconds
+        timeout=settings.worker_tool_timeout_seconds,
+        trust_env=False,
     ) as client:
-        resp = await client.post(url, json=payload)
+        try:
+            resp = await client.post(url, json=payload)
+        except httpx.TimeoutException as exc:
+            raise TimeoutError(
+                f"remote tool timeout after {settings.worker_tool_timeout_seconds}s: "
+                f"{ctx.tool_name} target={ctx.host} port={ctx.port}"
+            ) from exc
         resp.raise_for_status()
         data = resp.json()
 
@@ -34,10 +41,27 @@ async def run_remote_tool(ctx: TaskContext) -> ToolRunOutcome:
 
     raw_output = data.get("raw_output") or data.get("output") or ""
 
-    if ctx.tool_name == "httpx_basic":
-        parsed_result = parse_httpx_output(raw_output)
+    parsed_result = data.get("parsed_result")
+    if not isinstance(parsed_result, dict) or not parsed_result:
+        parsed_result = parse_tool_output(
+            ctx.tool_name,
+            raw_output or str(data),
+            success=success,
+            host=ctx.host,
+            port=ctx.port,
+            service=ctx.service,
+        )
     else:
-        parsed_result = data.get("parsed_result") or data
+        fallback = parse_tool_output(
+            ctx.tool_name,
+            raw_output,
+            success=success,
+            host=ctx.host,
+            port=ctx.port,
+            service=ctx.service,
+        )
+        fallback.update(parsed_result)
+        parsed_result = fallback
 
     return ToolRunOutcome(
         command=data.get("command") or f"remote:{ctx.tool_name}",

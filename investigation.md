@@ -162,7 +162,9 @@ The root cause seems to be that the decision engine is correctly implemented, bu
 
 Let's examine the decision engine implementation:
 
-In worker/decision_engine.py, there's a function that creates a RiskV21Result:
+Historical note: `worker/decision_engine.py` has since been archived under
+`_archive/legacy_unused/worker_decision_engine.py`. At the time of this
+investigation, it contained a function that created a RiskV21Result:
 
 ```python
 def calculate_risk_v21():

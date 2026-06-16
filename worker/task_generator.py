@@ -175,7 +175,7 @@ async def generate_tool_task(
         or getattr(registry_row, "approval_required", False)
     )
 
-    approval_status = "pending" if approval_required else "not_required"
+    approval_status = "pending_approval" if approval_required else "not_required"
 
     approval_reason = "; ".join(
         _normalize_reasoning(decision_result.get("reasoning"))

@@ -41,6 +41,14 @@ def normalize_confidence(match_confidence: float | None) -> float:
     return clamp_score(float(match_confidence), minimum=0.0, maximum=1.0)
 
 
+def is_high_confidence_version_match(row: PortCveMatch) -> bool:
+    return (
+        row.match_type == "exact_cpe_version"
+        and normalize_confidence(row.match_confidence) >= 0.85
+        and row.version not in (None, "", "*")
+    )
+
+
 def score_single_cve(
     *,
     cvss: float | None,
@@ -157,13 +165,13 @@ async def summarize_cve_risk(
             best_match_confidence = row.match_confidence
             best_match_type = row.match_type
 
-        if row.cvss is not None:
+        if is_high_confidence_version_match(row) and row.cvss is not None:
             max_cvss = row.cvss if max_cvss is None else max(max_cvss, row.cvss)
 
-        if row.epss is not None:
+        if is_high_confidence_version_match(row) and row.epss is not None:
             max_epss = row.epss if max_epss is None else max(max_epss, row.epss)
 
-        if row.kev:
+        if is_high_confidence_version_match(row) and row.kev:
             has_kev = True
 
     return CveRiskSummary(
