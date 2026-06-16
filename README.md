@@ -31,19 +31,19 @@ The platform is NOT:
 
 ```text
 Target
-??
+|
 ToolTask
-??
+|
 Worker
-??
+|
 ToolResult
-??
+|
 Analysis Pipeline
-??
+|
 Decision
-??
+|
 Task Generator
-??
+|
 ToolTask
 ```
 
@@ -57,35 +57,35 @@ Create a complete governed execution loop from target intake to controlled tool 
 
 ```text
 Target
-??
+|
 Dispatcher
-??
+|
 Policy Validation
-??
+|
 ToolRegistry Validation
-??
+|
 ToolTask
-??
+|
 Worker
-??
+|
 Approval Validation
-??
+|
 CommandTemplate Rendering
-??
+|
 subprocess(shell=False)
-??
+|
 Parser
-??
+|
 ToolResult
-??
+|
 Analysis Pipeline
-    ?œâ? Evidence Normalizer
-    ?œâ? MITRE Mapper
-    ?œâ? Confidence Engine
-    ?”â? Decision Engine
-??
+     Evidence Normalizer
+     MITRE Mapper
+     Confidence Engine
+     Decision Engine
+|
 Task Generator
-??
+|
 ToolTask
 ```
 
