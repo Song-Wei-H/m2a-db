@@ -42,6 +42,42 @@ CREATE TABLE open_ports (
 );
 CREATE UNIQUE INDEX idx_open_ports_scan_run_port_protocol
   ON open_ports(scan_run_id, port, protocol);
+CREATE TABLE decision_scores (
+  id SERIAL PRIMARY KEY,
+  target_id INT NOT NULL REFERENCES targets(id),
+  open_port_id INT REFERENCES open_ports(id),
+  risk_score FLOAT NOT NULL,
+  base_risk_score FLOAT,
+  adjusted_risk_score FLOAT,
+  confidence_score FLOAT,
+  learning_adjustment FLOAT DEFAULT 0,
+  runtime_adjustment FLOAT DEFAULT 0,
+  evidence_adjustment FLOAT DEFAULT 0,
+  waf_detected BOOLEAN DEFAULT false,
+  tool_blocked BOOLEAN DEFAULT false,
+  tool_timeout BOOLEAN DEFAULT false,
+  severity VARCHAR(20),
+  next_action VARCHAR(50) NOT NULL,
+  next_tool VARCHAR(100),
+  mitre_phase VARCHAR(100),
+  mitre_technique VARCHAR(100),
+  confidence FLOAT,
+  reason TEXT,
+  reasoning JSONB,
+  input_snapshot JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE TABLE tool_tasks (
+  id SERIAL PRIMARY KEY,
+  target_id INT NOT NULL REFERENCES targets(id),
+  open_port_id INT REFERENCES open_ports(id),
+  decision_score_id INT REFERENCES decision_scores(id),
+  tool_name VARCHAR(100) NOT NULL,
+  status VARCHAR(50) DEFAULT 'pending',
+  priority INT DEFAULT 5,
+  reject_reason TEXT,
+  created_at TIMESTAMP DEFAULT NOW()
+);
 CREATE TABLE tool_results (
   id SERIAL PRIMARY KEY,
   target_id INT REFERENCES targets(id),
@@ -108,31 +144,6 @@ CREATE TABLE cve_enrichment (
   mitre_tactic VARCHAR(100),
   mitre_technique VARCHAR(100),
   description TEXT,
-  created_at TIMESTAMP DEFAULT NOW()
-);
-CREATE TABLE decision_scores (
-  id SERIAL PRIMARY KEY,
-  target_id INT NOT NULL REFERENCES targets(id),
-  open_port_id INT REFERENCES open_ports(id),
-  risk_score FLOAT NOT NULL,
-  next_action VARCHAR(50) NOT NULL,
-  next_tool VARCHAR(100),
-  mitre_phase VARCHAR(100),
-  mitre_technique VARCHAR(100),
-  confidence FLOAT,
-  reason TEXT,
-  input_snapshot JSONB,
-  created_at TIMESTAMP DEFAULT NOW()
-);
-CREATE TABLE tool_tasks (
-  id SERIAL PRIMARY KEY,
-  target_id INT NOT NULL REFERENCES targets(id),
-  open_port_id INT REFERENCES open_ports(id),
-  decision_score_id INT REFERENCES decision_scores(id),
-  tool_name VARCHAR(100) NOT NULL,
-  status VARCHAR(50) DEFAULT 'pending',
-  priority INT DEFAULT 5,
-  reject_reason TEXT,
   created_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX idx_decision_scores_target_id ON decision_scores(target_id);
