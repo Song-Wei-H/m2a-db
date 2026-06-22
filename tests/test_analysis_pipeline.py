@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from sqlalchemy import select
 
 from worker.analysis_pipeline import analyze_tool_result_and_generate_task, _existing_tool_task
-from app.models import ToolTask
+from app.models import NormalizedResult, ToolTask
 
 
 class FakeAsyncSessionContext:
@@ -116,8 +116,8 @@ async def test_analysis_pipeline_httpx_basic_semantics():
 
 
 @pytest.mark.asyncio
-async def test_decision_engine_remediate_kev():
-    """Test that KEV detection results in remediate action"""
+async def test_decision_engine_remediate_kev_without_next_tool():
+    """Test that KEV without a next tool can still recommend remediation."""
     fake_session = make_fake_session()
     with patch("worker.analysis_pipeline.get_next_tool_task", new_callable=AsyncMock) as mock_generate, \
          patch("worker.analysis_pipeline.async_session", return_value=FakeAsyncSessionContext(fake_session)), \
@@ -165,8 +165,8 @@ async def test_decision_engine_remediate_kev():
 
 
 @pytest.mark.asyncio
-async def test_decision_engine_verify_high_risk():
-    """Test verify action for high risk scenarios"""
+async def test_decision_engine_continues_when_high_risk_has_next_tool():
+    """Test that high risk with a next tool remains a governed continuation."""
     fake_session = make_fake_session()
     with patch("worker.analysis_pipeline.get_next_tool_task", new_callable=AsyncMock) as mock_generate, \
          patch("worker.analysis_pipeline.async_session", return_value=FakeAsyncSessionContext(fake_session)), \
@@ -209,7 +209,7 @@ async def test_decision_engine_verify_high_risk():
         )
 
         result = results[0]
-        assert result["decision_result"]["recommended_action"] == "verify"
+        assert result["decision_result"]["recommended_action"] == "continue"
 
 
 @pytest.mark.asyncio
@@ -467,3 +467,60 @@ async def test_analysis_pipeline_creates_stop_decision_when_no_normalized_eviden
     assert mock_next.await_args.kwargs["decision_result"]["recommended_action"] == "stop"
     assert mock_next.await_args.kwargs["decision_result"]["recommended_tool"] is None
     assert results[0]["task_result"]["target_completed"] is True
+
+
+@pytest.mark.asyncio
+async def test_analysis_pipeline_persists_normalized_result_for_evidence():
+    fake_session = make_fake_session()
+    added_rows = []
+
+    def add_row(row):
+        added_rows.append(row)
+
+    async def flush_rows():
+        for index, row in enumerate(added_rows, start=700):
+            if getattr(row, "id", None) is None:
+                row.id = index
+
+    fake_session.add.side_effect = add_row
+    fake_session.flush.side_effect = flush_rows
+
+    with patch("worker.analysis_pipeline.get_next_tool_task", new_callable=AsyncMock) as mock_next, \
+         patch("worker.analysis_pipeline.async_session", return_value=FakeAsyncSessionContext(fake_session)), \
+         patch("worker.analysis_pipeline.get_learning_feedback", new_callable=AsyncMock) as mock_feedback, \
+         patch("worker.analysis_pipeline.summarize_cve_risk", new_callable=AsyncMock) as mock_cve:
+        mock_next.return_value = {"action": "tool_task_created", "tool_task_id": 901}
+        mock_feedback.return_value = {"success_rate": 0.85, "false_positive_rate": 0.0}
+        mock_cve.return_value = MagicMock(
+            max_cvss=None,
+            max_epss=None,
+            has_kev=False,
+            total_score=0,
+            best_cve=None,
+            cve_count=0,
+            best_match_type=None,
+            best_match_confidence=None,
+        )
+
+        await analyze_tool_result_and_generate_task(
+            target_id=1,
+            open_port_id=10,
+            tool_name="httpx_basic",
+            parsed_output={
+                "status_codes": [200],
+                "urls": ["https://example.com"],
+            },
+            raw_output="https://example.com [200]",
+            tool_result_id=99,
+            decision_score_id=50,
+        )
+
+    normalized_rows = [row for row in added_rows if isinstance(row, NormalizedResult)]
+    assert len(normalized_rows) == 1
+    normalized = normalized_rows[0]
+    assert normalized.target_id == 1
+    assert normalized.open_port_id == 10
+    assert normalized.tool_result_id == 99
+    assert normalized.tool_name == "httpx_basic"
+    assert normalized.evidence_type == "http_service"
+    assert normalized.normalized_output["evidence_ref"] == "tool_result:99"

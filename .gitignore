@@ -30,6 +30,12 @@ node_modules/
 
 *.pem
 *.key
+*.crt
+*.ovpn
+id_rsa*
+secrets.*
+config.local.*
+docker-compose.override.yml
 *.p12
 *.pfx
 

@@ -303,6 +303,11 @@ def decide_next_action(
     max_epss: float | None,
     cvss: float | None,
 ) -> str:
+    # Consistency rule: if a next tool exists, the decision is to continue.
+    # Approval and execution gating are enforced later by the governed auto loop.
+    if next_tool is not None:
+        return "continue"
+
     # Priority 1: KEV or CVSS >= 9.0
     if kev_detected:
         return "remediate"
@@ -327,10 +332,6 @@ def decide_next_action(
     if severity == "high":
         return "verify"
 
-    # Priority 3: Consistency rule - if next_tool exists, action must be continue
-    if next_tool is not None:
-        return "continue"
-    
     # Priority 4: No tool available
     if severity == "low":
         return "stop"

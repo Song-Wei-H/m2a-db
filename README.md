@@ -4,6 +4,14 @@ FastAPI + PostgreSQL + Dispatcher + Kali Worker based governed penetration testi
 
 This project implements a deterministic-first, auditable, approval-driven execution loop for controlled security assessment workflows.
 
+## Public Safety Notice
+
+This repository is for governed, authorized, defensive security assessment only.
+
+Do not use this project to scan, test, enumerate, or interact with systems unless you have explicit authorization. The platform is intentionally constrained around allowlisted tools, command templates, scope validation, approval gates, and `subprocess(shell=False)`.
+
+This repository must not be extended with credential attacks, phishing delivery, EDR or antivirus bypass, arbitrary shell execution, arbitrary argv execution, exploit chains, or payload delivery workflows.
+
 Authoritative project context:
 
 ```text
@@ -234,8 +242,13 @@ py -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements.txt
 ```
 
----
+Run tests:
 
+```powershell
+.\.venv\Scripts\python -m pytest tests -v
+```
+
+---
 ## Database Migrations
 
 For existing databases, apply migration files from `initdb/` in order.
@@ -509,7 +522,7 @@ Out-of-scope test, expected rejected:
 ```powershell
 $body = @{
   tool="nmap_service"
-  target="8.8.8.8"
+  target="198.51.100.200"
   reason="test"
   risk_level="low"
   profile="internal"

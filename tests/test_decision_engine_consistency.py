@@ -23,7 +23,7 @@ def test_decide_next_action_consistency():
     # Should always return "continue" when next_tool exists
     assert result == "continue", f"Expected 'continue', got '{result}'"
     
-    # Test case 2: KEV detection should return "remediate"
+    # Test case 2: KEV detection with a next tool should still continue.
     result = decide_next_action(
         base_risk_score=8.0,
         adjusted_risk_score=8.0,
@@ -38,9 +38,9 @@ def test_decide_next_action_consistency():
         cvss=None,
     )
     
-    assert result == "remediate", f"Expected 'remediate', got '{result}'"
+    assert result == "continue", f"Expected 'continue', got '{result}'"
     
-    # Test case 3: CVSS >= 9 should return "remediate"
+    # Test case 3: CVSS >= 9 with a next tool should still continue.
     result = decide_next_action(
         base_risk_score=9.0,
         adjusted_risk_score=9.0,
@@ -55,9 +55,9 @@ def test_decide_next_action_consistency():
         cvss=9.5,  # High CVSS
     )
     
-    assert result == "remediate", f"Expected 'remediate', got '{result}'"
+    assert result == "continue", f"Expected 'continue', got '{result}'"
     
-    # Test case 4: High severity should return "verify"
+    # Test case 4: High severity with a next tool should still continue.
     result = decide_next_action(
         base_risk_score=7.0,
         adjusted_risk_score=7.0,
@@ -72,7 +72,7 @@ def test_decide_next_action_consistency():
         cvss=None,
     )
     
-    assert result == "verify", f"Expected 'verify', got '{result}'"
+    assert result == "continue", f"Expected 'continue', got '{result}'"
     
     # Test case 5: No tool and low severity should return "stop"
     result = decide_next_action(

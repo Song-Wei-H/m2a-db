@@ -139,6 +139,15 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
         contradictory_evidence={},
         created_at=created_at,
     )
+    normalized_result = row(
+        id=602,
+        open_port_id=101,
+        tool_result_id=301,
+        tool_name="httpx",
+        evidence_type="http_service",
+        normalized_output={"evidence_type": "http_service", "details": {"status_code": 200}},
+        created_at=created_at,
+    )
     auto_loop_decision = row(
         id=701,
         round_number=2,
@@ -180,6 +189,7 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
             FakeScalarResult([tool_task]),
             FakeScalarResult([decision_score]),
             FakeScalarResult([evidence_confidence]),
+            FakeScalarResult([normalized_result]),
             FakeScalarResult([auto_loop_decision]),
             FakeScalarResult([learning_feedback]),
             FakeScalarResult([cve_match]),
@@ -190,7 +200,7 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
         report = await generate_target_report(1)
 
     session.get.assert_awaited_once()
-    assert session.execute.await_count == 8
+    assert session.execute.await_count == 9
     assert report["target"] is report["target_summary"]
     assert report["target_summary"]["target_id"] == 1
     assert report["target_summary"]["open_port_count"] == 1
@@ -214,10 +224,33 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
     assert report["risk_ranking"]["high_risk_ports"][0]["open_port_id"] == 101
     assert report["risk_ranking"]["highest_risk_decision"]["decision_score_id"] == 501
     assert report["remediation"][0]["service"] == "https"
+    assert report["remediation"][0]["requires_followup"] is False
+    assert report["remediation"][0]["requires_remediation"] is False
+    assert report["remediation"][0]["no_further_action"] is False
     assert report["remediation_guidance"] == [report["remediation"][0]["guidance"]]
     assert report["evidence_confidence"][0]["confidence_score"] == 0.93
+    assert report["normalized_results"] == [
+        {
+            "normalized_result_id": 602,
+            "open_port_id": 101,
+            "tool_result_id": 301,
+            "tool_name": "httpx",
+            "evidence_type": "http_service",
+            "normalized_output": {"evidence_type": "http_service", "details": {"status_code": 200}},
+            "created_at": created_at,
+        }
+    ]
     assert report["auto_loop_decisions"][0]["reason"] == "continue"
     assert report["learning_feedback"][0]["learning_score"] == 0.8
+    assert report["learning_tool_score"] == [
+        {
+            "tool_name": "nuclei",
+            "feedback_count": 1,
+            "success_count": 1,
+            "avg_learning_score": 0.8,
+            "final_learning_score": 0.8,
+        }
+    ]
     assert report["matched_cves"][0]["match_type"] == "exact_cpe_version"
     assert report["learning_feedback_summary"] == {
         "total_feedback": 1,
@@ -313,6 +346,7 @@ async def test_completed_target_recommended_actions_use_latest_final_stop_only()
             FakeScalarResult([]),
             FakeScalarResult([]),
             FakeScalarResult([]),
+            FakeScalarResult([]),
         ],
     )
 
@@ -334,3 +368,83 @@ async def test_completed_target_recommended_actions_use_latest_final_stop_only()
     ]
     assert (501, "continue", "httpx_basic") in decision_actions
     assert (502, "stop", None) in decision_actions
+
+
+@pytest.mark.asyncio
+async def test_report_remediation_flags_follow_next_action():
+    created_at = datetime(2026, 1, 2, 3, 4, 5)
+    decisions = [
+        row(
+            id=1,
+            open_port_id=None,
+            risk_score=9.0,
+            base_risk_score=9.0,
+            adjusted_risk_score=9.0,
+            confidence_score=0.9,
+            learning_adjustment=0,
+            runtime_adjustment=0,
+            evidence_adjustment=0,
+            severity="critical",
+            next_action="remediate",
+            next_tool=None,
+            mitre_phase=None,
+            mitre_technique=None,
+            confidence=0.9,
+            reason="Critical issue",
+            reasoning=[],
+            input_snapshot={},
+            waf_detected=False,
+            tool_blocked=False,
+            tool_timeout=False,
+            created_at=created_at,
+        ),
+        row(
+            id=2,
+            open_port_id=None,
+            risk_score=5.0,
+            base_risk_score=5.0,
+            adjusted_risk_score=5.0,
+            confidence_score=0.8,
+            learning_adjustment=0,
+            runtime_adjustment=0,
+            evidence_adjustment=0,
+            severity="medium",
+            next_action="continue",
+            next_tool="dirb_safe",
+            mitre_phase=None,
+            mitre_technique=None,
+            confidence=0.8,
+            reason="Needs follow-up",
+            reasoning=[],
+            input_snapshot={},
+            waf_detected=False,
+            tool_blocked=False,
+            tool_timeout=False,
+            created_at=created_at,
+        ),
+    ]
+    session = make_session(
+        make_target(),
+        [
+            FakeScalarResult([]),
+            FakeScalarResult([]),
+            FakeScalarResult([]),
+            FakeScalarResult(decisions),
+            FakeScalarResult([]),
+            FakeScalarResult([]),
+            FakeScalarResult([]),
+            FakeScalarResult([]),
+            FakeScalarResult([]),
+        ],
+    )
+
+    with patch("worker.report_generator.async_session", return_value=FakeAsyncSessionContext(session)):
+        report = await generate_target_report(1)
+
+    by_action = {item["reason"]: item for item in report["remediation"]}
+    assert by_action["Critical issue"]["requires_remediation"] is True
+    assert by_action["Critical issue"]["requires_followup"] is False
+    assert by_action["Critical issue"]["no_further_action"] is False
+    assert by_action["Needs follow-up"]["requires_remediation"] is False
+    assert by_action["Needs follow-up"]["requires_followup"] is True
+    assert by_action["Needs follow-up"]["no_further_action"] is False

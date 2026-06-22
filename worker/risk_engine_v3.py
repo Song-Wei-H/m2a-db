@@ -289,7 +289,7 @@ def _calculate_risk_v3_primary(
         cvss=cvss,
     )
     http_status = _first_http_status(parsed_output)
-    if tool_name == "httpx_basic" and http_status is not None and http_status >= 500:
+    if next_tool is None and tool_name == "httpx_basic" and http_status is not None and http_status >= 500:
         next_action = "verify"
 
     components = {

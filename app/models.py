@@ -176,6 +176,23 @@ class ToolResult(Base):
         server_default=func.now(),
     )
 
+
+class NormalizedResult(Base):
+    __tablename__ = "normalized_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_id: Mapped[int | None] = mapped_column(Integer)
+    open_port_id: Mapped[int | None] = mapped_column(Integer)
+    tool_result_id: Mapped[int | None] = mapped_column(Integer)
+    tool_name: Mapped[str | None] = mapped_column(String(100))
+    evidence_type: Mapped[str | None] = mapped_column(String(100))
+    normalized_output: Mapped[dict | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False),
+        server_default=func.now(),
+    )
+
+
 class ToolTask(Base):
     __tablename__ = "tool_tasks"
 

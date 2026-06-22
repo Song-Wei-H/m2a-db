@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from worker.task_poller import _persist_result, execute_task
+from worker.task_poller import _persist_result, execute_task, fetch_pending_tasks
 from worker.tool_runner import TaskContext, ToolRunOutcome
 
 
@@ -99,6 +99,16 @@ class FakeScalarResult:
     def scalar_one_or_none(self):
         return self.value
 
+    def scalars(self):
+        return self
+
+    def all(self):
+        if self.value is None:
+            return []
+        if isinstance(self.value, list):
+            return self.value
+        return [self.value]
+
 
 class FakeAsyncSessionContext:
     def __init__(self, session):
@@ -184,3 +194,18 @@ async def test_execute_task_remote_timeout_marks_failed_and_writes_tool_result()
     assert failed_result.raw_output == timeout_reason
     assert failed_result.evidence == timeout_reason
     assert failed_result.parsed_output == {"status": "failed", "error": timeout_reason}
+
+
+@pytest.mark.asyncio
+async def test_fetch_pending_tasks_excludes_pending_approval_tasks():
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=FakeScalarResult([]))
+
+    tasks = await fetch_pending_tasks(db)
+
+    assert tasks == []
+    stmt = db.execute.await_args.args[0]
+    compiled_sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    assert "tool_tasks.status = 'pending'" in compiled_sql
+    assert "tool_tasks.approval_status IN ('not_required', 'approved')" in compiled_sql
+    assert "pending_approval" not in compiled_sql

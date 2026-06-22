@@ -44,7 +44,7 @@ def test_kev_boost_can_make_critical():
 
     assert result.base_risk_score == 10.0
     assert result.severity == "critical"
-    assert result.next_action == "remediate"
+    assert result.next_action == "continue"
 
 
 def test_learning_score_adjustment_is_applied():

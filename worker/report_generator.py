@@ -11,6 +11,7 @@ from app.models import (
     DecisionScore,
     EvidenceConfidence,
     LearningFeedback,
+    NormalizedResult,
     OpenPort,
     PortCveMatch,
     Target,
@@ -90,12 +91,22 @@ def _remediation_for_decision(decision: DecisionScore, port: OpenPort | None) ->
     service = port.service if port else None
     port_number = port.port if port else None
     protocol = port.protocol if port else None
+    severity = (decision.severity or "").lower()
+    next_action = (decision.next_action or "").lower()
     guidance = (
         f"Prioritize remediation for {service or 'affected service'} based on "
         f"{decision.severity or 'unknown'} risk decision."
     )
     if service:
         guidance = _remediation_for_port(port)["guidance"]
+    if severity in {"critical", "high"}:
+        guidance = (
+            f"{guidance} Prioritize patching, restrict exposure, and confirm whether KEV/CVE matches apply."
+        )
+    elif severity == "medium":
+        guidance = f"{guidance} Validate versions, harden configuration, and schedule patching."
+    else:
+        guidance = f"{guidance} Record the finding, monitor for change, and reduce unnecessary service exposure."
 
     return {
         "open_port_id": decision.open_port_id,
@@ -107,6 +118,9 @@ def _remediation_for_decision(decision: DecisionScore, port: OpenPort | None) ->
         "recommendation": guidance,
         "guidance": guidance,
         "reason": decision.reason,
+        "requires_remediation": next_action == "remediate",
+        "requires_followup": next_action == "continue",
+        "no_further_action": next_action == "stop",
     }
 
 
@@ -157,6 +171,28 @@ def _summarize_learning(feedback_rows: Iterable[LearningFeedback]) -> Dict[str, 
         "average_learning_score": sum(scores) / len(scores) if scores else None,
         "by_tool": list(by_tool.values()),
     }
+
+
+def _learning_tool_score(feedback_rows: Iterable[LearningFeedback]) -> list[Dict[str, Any]]:
+    rows = list(feedback_rows)
+    by_tool: Dict[str, list[LearningFeedback]] = {}
+    for row in rows:
+        by_tool.setdefault(row.tool_name or "unknown", []).append(row)
+
+    scores = []
+    for tool_name, tool_rows in sorted(by_tool.items()):
+        learning_scores = [row.learning_score for row in tool_rows if row.learning_score is not None]
+        avg_learning_score = sum(learning_scores) / len(learning_scores) if learning_scores else None
+        scores.append(
+            {
+                "tool_name": tool_name,
+                "feedback_count": len(tool_rows),
+                "success_count": len([row for row in tool_rows if row.success is True]),
+                "avg_learning_score": avg_learning_score,
+                "final_learning_score": avg_learning_score if avg_learning_score is not None else 0.5,
+            }
+        )
+    return scores
 
 
 async def generate_target_report(target_id: int) -> Dict[str, Any]:
@@ -219,6 +255,14 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
                 select(EvidenceConfidence)
                 .where(EvidenceConfidence.target_id == target_id)
                 .order_by(EvidenceConfidence.created_at)
+            )
+        ).scalars().all()
+
+        normalized_results = (
+            await session.execute(
+                select(NormalizedResult)
+                .where(NormalizedResult.target_id == target_id)
+                .order_by(NormalizedResult.created_at)
             )
         ).scalars().all()
 
@@ -480,6 +524,18 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             }
             for evidence in evidence_confidence
         ]
+        normalized_results_data = [
+            {
+                "normalized_result_id": normalized.id,
+                "open_port_id": normalized.open_port_id,
+                "tool_result_id": normalized.tool_result_id,
+                "tool_name": normalized.tool_name,
+                "evidence_type": normalized.evidence_type,
+                "normalized_output": normalized.normalized_output,
+                "created_at": normalized.created_at,
+            }
+            for normalized in normalized_results
+        ]
         auto_loop_decisions_data = [
             {
                 "auto_loop_decision_id": auto_decision.id,
@@ -519,6 +575,7 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             "decisions_by_risk": decision_scores_data,
         }
         learning_feedback_summary = _summarize_learning(learning_feedback)
+        learning_tool_score = _learning_tool_score(learning_feedback)
 
         return {
             "target_summary": target_summary,
@@ -526,7 +583,7 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             "open_ports": open_ports,
             "tool_results": tool_results_data,
             "tool_tasks": tool_tasks_data,
-            "normalized_results": [],
+            "normalized_results": normalized_results_data,
             "decision_scores": decision_scores_data,
             "mitre_mapping": mitre_mapping,
             "risk_ranking": risk_ranking,
@@ -536,5 +593,6 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             "auto_loop_decisions": auto_loop_decisions_data,
             "learning_feedback": learning_feedback_data,
             "learning_feedback_summary": learning_feedback_summary,
+            "learning_tool_score": learning_tool_score,
             "matched_cves": matched_cves,
         }

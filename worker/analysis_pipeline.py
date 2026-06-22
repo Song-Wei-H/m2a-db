@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.database import async_session
-from app.models import AutoLoopDecision, DecisionScore, EvidenceConfidence, OpenPort, Target, ToolTask
+from app.models import AutoLoopDecision, DecisionScore, EvidenceConfidence, NormalizedResult, OpenPort, Target, ToolTask
 from worker.confidence_scoring import calculate_confidence
 from worker.cve_enrichment import summarize_cve_risk
 from worker.evidence_normalizer import normalize_tool_result
@@ -406,6 +406,25 @@ async def analyze_tool_result_and_generate_task(
                     contradictory_evidence={},
                 )
                 db.add(evidence_confidence)
+                db.add(
+                    NormalizedResult(
+                        target_id=target_id,
+                        open_port_id=open_port_id,
+                        tool_result_id=tool_result_id,
+                        tool_name=tool_name,
+                        evidence_type="vulnerability_scan_negative",
+                        normalized_output={
+                            "tool": tool_name,
+                            "evidence_type": "vulnerability_scan_negative",
+                            "confidence": 0.80,
+                            "evidence_ref": f"tool_result:{tool_result_id}" if tool_result_id else bool(raw_output),
+                            "details": {
+                                "finding_count": 0,
+                                "parser_success": parsed_output.get("parser_success"),
+                            },
+                        },
+                    )
+                )
 
                 await record_learning_feedback(
                     session=db,
@@ -680,6 +699,16 @@ async def analyze_tool_result_and_generate_task(
             )
 
             db.add(evidence_confidence)
+            db.add(
+                NormalizedResult(
+                    target_id=target_id,
+                    open_port_id=open_port_id,
+                    tool_result_id=tool_result_id,
+                    tool_name=tool_name,
+                    evidence_type=evidence.get("evidence_type"),
+                    normalized_output=evidence,
+                )
+            )
 
             decision = DecisionScore(
                 target_id=target_id,
