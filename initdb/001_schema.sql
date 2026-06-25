@@ -76,6 +76,11 @@ CREATE TABLE tool_tasks (
   status VARCHAR(50) DEFAULT 'pending',
   priority INT DEFAULT 5,
   reject_reason TEXT,
+  approval_status VARCHAR(50) NOT NULL DEFAULT 'not_required',
+  approval_required BOOLEAN NOT NULL DEFAULT FALSE,
+  approval_reason TEXT,
+  approved_at TIMESTAMP,
+  approved_by VARCHAR(255),
   created_at TIMESTAMP DEFAULT NOW()
 );
 CREATE TABLE tool_results (

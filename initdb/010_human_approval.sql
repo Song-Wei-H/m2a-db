@@ -8,3 +8,9 @@ ALTER TABLE tool_tasks
 
 ALTER TABLE tool_tasks
     ADD COLUMN IF NOT EXISTS approval_reason TEXT;
+
+ALTER TABLE tool_tasks
+    ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;
+
+ALTER TABLE tool_tasks
+    ADD COLUMN IF NOT EXISTS approved_by VARCHAR(255);

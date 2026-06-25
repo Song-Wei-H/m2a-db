@@ -209,6 +209,8 @@ class ToolTask(Base):
         Boolean, nullable=False, server_default="false"
     )
     approval_reason: Mapped[str | None] = mapped_column(Text)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False))
+    approved_by: Mapped[str | None] = mapped_column(String(255))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),

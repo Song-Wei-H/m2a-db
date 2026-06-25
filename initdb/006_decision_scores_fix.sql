@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS tool_tasks (
   status VARCHAR(50) DEFAULT 'pending',
   priority INT DEFAULT 5,
   reject_reason TEXT,
+  approval_status VARCHAR(50) NOT NULL DEFAULT 'not_required',
+  approval_required BOOLEAN NOT NULL DEFAULT FALSE,
+  approval_reason TEXT,
+  approved_at TIMESTAMP,
+  approved_by VARCHAR(255),
   created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -50,6 +55,11 @@ ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS decision_score_id INT REFERENCES
 ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'pending';
 ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS priority INT DEFAULT 5;
 ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS reject_reason TEXT;
+ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS approval_status VARCHAR(50) NOT NULL DEFAULT 'not_required';
+ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS approval_required BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS approval_reason TEXT;
+ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;
+ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS approved_by VARCHAR(255);
 
 CREATE INDEX IF NOT EXISTS idx_decision_scores_target_id ON decision_scores(target_id);
 CREATE INDEX IF NOT EXISTS idx_tool_tasks_target_id ON tool_tasks(target_id);
