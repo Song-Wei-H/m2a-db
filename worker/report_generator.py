@@ -196,6 +196,32 @@ def _learning_tool_score(feedback_rows: Iterable[LearningFeedback]) -> list[Dict
     return scores
 
 
+def _learning_context_summary(feedback_rows: Iterable[LearningFeedback]) -> list[Dict[str, Any]]:
+    rows = list(feedback_rows)
+    by_context: Dict[str, Dict[str, list[LearningFeedback]]] = {}
+    for row in rows:
+        service = row.service or "unknown"
+        tool_name = row.tool_name or "unknown"
+        by_context.setdefault(service, {}).setdefault(tool_name, []).append(row)
+
+    summary: list[Dict[str, Any]] = []
+    for service, tool_rows in sorted(by_context.items()):
+        tools = []
+        for tool_name, entries in sorted(tool_rows.items()):
+            scores = [entry.learning_score for entry in entries if entry.learning_score is not None]
+            success_count = len([entry for entry in entries if entry.success is True])
+            tools.append(
+                {
+                    "tool_name": tool_name,
+                    "feedback_count": len(entries),
+                    "success_rate": success_count / len(entries) if entries else 0.0,
+                    "avg_learning_score": sum(scores) / len(scores) if scores else None,
+                }
+            )
+        summary.append({"service": service, "tools": tools})
+    return summary
+
+
 async def generate_target_report(target_id: int) -> Dict[str, Any]:
     """Generate a structured report for a target showing scan results, decisions, and remediation guidance."""
     async with async_session() as session:
@@ -622,6 +648,7 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
         }
         learning_feedback_summary = _summarize_learning(learning_feedback)
         learning_tool_score = _learning_tool_score(learning_feedback)
+        learning_summary = _learning_context_summary(learning_feedback)
 
         return {
             "target_summary": target_summary,
@@ -639,6 +666,7 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             "auto_loop_decisions": auto_loop_decisions_data,
             "learning_feedback": learning_feedback_data,
             "learning_feedback_summary": learning_feedback_summary,
+            "learning_summary": learning_summary,
             "learning_tool_score": learning_tool_score,
             "matched_cves": matched_cves,
         }

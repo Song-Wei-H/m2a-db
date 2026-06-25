@@ -9,6 +9,7 @@ from worker.learning_engine import get_tool_learning_score
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORTING_VIEWS_SQL = (ROOT / "initdb" / "017_reporting_views.sql").read_text()
+LEARNING_CONTEXT_SQL = (ROOT / "initdb" / "022_learning_context.sql").read_text()
 
 
 class FakeFirstResult:
@@ -80,6 +81,23 @@ def test_learning_tool_score_view_exposes_expected_aggregate_columns():
 
     assert "FROM learning_feedback lf" in REPORTING_VIEWS_SQL
     assert "GROUP BY lf.tool_name" in REPORTING_VIEWS_SQL
+
+
+def test_learning_tool_context_score_view_exposes_context_columns():
+    assert "CREATE OR REPLACE VIEW learning_tool_context_score" in LEARNING_CONTEXT_SQL
+    for column in (
+        "tool_name",
+        "service",
+        "evidence_type",
+        "port_bucket",
+        "total_runs",
+        "success_count",
+        "failure_count",
+        "success_rate",
+        "avg_learning_score",
+        "last_seen",
+    ):
+        assert column in LEARNING_CONTEXT_SQL
 
 
 @pytest.mark.asyncio

@@ -15,8 +15,11 @@ from worker.confidence_scoring import calculate_confidence
 from worker.cve_enrichment import summarize_cve_risk
 from worker.evidence_normalizer import normalize_tool_result
 from worker.learning_engine import get_learning_feedback, record_learning_feedback
+from worker.learning_context import LearningContext
+from worker.learning_statistics import LearningStatisticsProvider
 from worker.mitre_mapper import map_to_mitre
 from worker.risk_engine_v3 import calculate_risk
+from worker.tool_ranking import DeterministicRanking, LearningRanking, ToolRank
 from worker.tool_name_normalizer import normalize_tool_name
 from worker.auto_loop import get_next_tool_task
 
@@ -25,6 +28,88 @@ __all__ = ["analyze_tool_result_and_generate_task"]
 logger = logging.getLogger(__name__)
 
 HTTP_SERVICES = {"http", "https", "http-alt", "www", "ssl/http"}
+
+
+async def _build_learning_metadata(
+    *,
+    session,
+    target_id: int,
+    open_port_id: int | None,
+    previous_tool: str,
+    evidence: dict[str, Any],
+    candidate_tools: list[str],
+    waf_detected: bool,
+) -> dict[str, Any]:
+    target = await session.get(Target, target_id)
+    open_port = await session.get(OpenPort, open_port_id) if open_port_id is not None else None
+    context = LearningContext.from_target(
+        target=target,
+        open_port=open_port,
+        evidence=evidence,
+        previous_tool=previous_tool,
+        waf_detected=waf_detected,
+    )
+    fallback_ranker = DeterministicRanking()
+    fallback_ranks = await fallback_ranker.rank_tools(
+        candidate_tools=candidate_tools,
+        context=context,
+    )
+
+    if not candidate_tools:
+        return _learning_metadata_payload(
+            context=context,
+            candidate_tools=[],
+            ranks=[],
+            strategy="DeterministicRanking",
+            reason="no_candidate_tools",
+        )
+
+    try:
+        provider = LearningStatisticsProvider(session)
+        ranks = await LearningRanking(provider).rank_tools(
+            candidate_tools=candidate_tools,
+            context=context,
+        )
+        return _learning_metadata_payload(
+            context=context,
+            candidate_tools=candidate_tools,
+            ranks=ranks,
+            strategy="LearningRanking",
+            reason="advisory ranking only; deterministic selection preserved",
+        )
+    except Exception as exc:
+        logger.warning("Learning ranking fallback for target_id=%s: %s", target_id, exc)
+        return _learning_metadata_payload(
+            context=context,
+            candidate_tools=candidate_tools,
+            ranks=fallback_ranks,
+            strategy="DeterministicRanking",
+            reason="learning statistics unavailable; deterministic order preserved",
+        )
+
+
+def _learning_metadata_payload(
+    *,
+    context: LearningContext,
+    candidate_tools: list[str],
+    ranks: list[ToolRank],
+    strategy: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "learning_context": context.to_dict(),
+        "candidate_tools": candidate_tools,
+        "tool_rank_scores": [
+            {
+                "tool_name": rank.tool_name,
+                "score": rank.score,
+                "reason": rank.reason,
+            }
+            for rank in ranks
+        ],
+        "selection_strategy": strategy,
+        "selection_reason": reason,
+    }
 
 
 def _score_open_port(port: OpenPort) -> dict[str, Any]:
@@ -673,6 +758,19 @@ async def analyze_tool_result_and_generate_task(
             "reasoning": risk_v3.reasoning,
         }
 
+        candidate_tools = [risk_v3.next_tool] if risk_v3.next_tool else []
+        async with async_session() as db:
+            learning_metadata = await _build_learning_metadata(
+                session=db,
+                target_id=target_id,
+                open_port_id=open_port_id,
+                previous_tool=tool_name,
+                evidence=evidence,
+                candidate_tools=candidate_tools,
+                waf_detected=risk_v3.waf_detected,
+            )
+        decision_result.update(learning_metadata)
+
         evidence_confidence = EvidenceConfidence(
             target_id=target_id,
             open_port_id=open_port_id,
@@ -750,6 +848,7 @@ async def analyze_tool_result_and_generate_task(
                     "mitre_mapping": mitre_mapping,
                     "confidence_result": confidence_result,
                     "parsed_output": risk_parsed_output,
+                    **learning_metadata,
                 },
             )
 
