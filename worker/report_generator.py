@@ -242,6 +242,29 @@ def _learning_ranking_summary(decision_rows: Iterable[DecisionScore]) -> list[Di
     return summary
 
 
+def _round_value_summary(decision_rows: Iterable[DecisionScore]) -> list[Dict[str, Any]]:
+    summary: list[Dict[str, Any]] = []
+    for decision in decision_rows:
+        snapshot = decision.input_snapshot or {}
+        if "round_value" not in snapshot:
+            continue
+        evidence = snapshot.get("evidence") or {}
+        details = evidence.get("details") if isinstance(evidence.get("details"), dict) else {}
+        summary.append(
+            {
+                "decision_score_id": decision.id,
+                "round": details.get("round") or snapshot.get("round_number"),
+                "tool_name": snapshot.get("tool_name"),
+                "round_value": snapshot.get("round_value"),
+                "feature_vector_version": snapshot.get("feature_vector_version"),
+                "label_version": snapshot.get("label_version"),
+                "new_findings": 1 if evidence else 0,
+                "created_at": decision.created_at,
+            }
+        )
+    return summary
+
+
 async def generate_target_report(target_id: int) -> Dict[str, Any]:
     """Generate a structured report for a target showing scan results, decisions, and remediation guidance."""
     async with async_session() as session:
@@ -670,6 +693,7 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
         learning_tool_score = _learning_tool_score(learning_feedback)
         learning_summary = _learning_context_summary(learning_feedback)
         learning_ranking_summary = _learning_ranking_summary(decision_scores)
+        round_value_summary = _round_value_summary(decision_scores)
 
         return {
             "target_summary": target_summary,
@@ -689,6 +713,7 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             "learning_feedback_summary": learning_feedback_summary,
             "learning_summary": learning_summary,
             "learning_ranking_summary": learning_ranking_summary,
+            "round_value_summary": round_value_summary,
             "learning_tool_score": learning_tool_score,
             "matched_cves": matched_cves,
         }

@@ -20,6 +20,9 @@ from worker.learning_context import LearningContext
 from worker.learning_statistics import LearningStatisticsProvider
 from worker.mitre_mapper import map_to_mitre
 from worker.risk_engine_v3 import calculate_risk
+from worker.feature_builder import FEATURE_VECTOR_VERSION
+from worker.round_label_builder import calculate_round_value
+from worker.round_learning_label import LABEL_VERSION
 from worker.tool_ranking import DeterministicRanking, ToolRank
 from worker.tool_name_normalizer import normalize_tool_name
 from worker.auto_loop import get_next_tool_task
@@ -761,6 +764,17 @@ async def analyze_tool_result_and_generate_task(
             },
             "reasoning": risk_v3.reasoning,
         }
+        round_value = calculate_round_value(
+            new_findings=1 if evidence else 0,
+            new_cve=int((cve_summary.cve_count if cve_summary else 0) or 0),
+            new_critical=1 if risk_v3.severity == "critical" else 0,
+            risk_increase=bool(risk_v3.risk_score and risk_v3.risk_score > 0),
+            confidence_increase=bool(risk_v3.confidence_score and risk_v3.confidence_score > 0),
+            tool_timeout=bool(risk_v3.tool_timeout),
+        )
+        decision_result["round_value"] = round_value
+        decision_result["feature_vector_version"] = FEATURE_VECTOR_VERSION
+        decision_result["label_version"] = LABEL_VERSION
 
         candidate_tools = [risk_v3.next_tool] if risk_v3.next_tool else []
         async with async_session() as db:
@@ -852,6 +866,9 @@ async def analyze_tool_result_and_generate_task(
                     "mitre_mapping": mitre_mapping,
                     "confidence_result": confidence_result,
                     "parsed_output": risk_parsed_output,
+                    "round_value": round_value,
+                    "feature_vector_version": FEATURE_VECTOR_VERSION,
+                    "label_version": LABEL_VERSION,
                     **learning_metadata,
                 },
             )

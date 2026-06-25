@@ -55,6 +55,31 @@ Engine, ToolTask lifecycle, Risk Engine, or approval gates:
 - `GBMRanking`
 - `RLRanking`
 
+Round value labeling is also advisory and offline-friendly. It compares an
+observed round with the following state and writes rule-based labels for future
+datasets:
+
+```text
+ToolResult
+-> Analysis Pipeline
+-> DecisionScore metadata
+-> RoundValueLabelBuilder
+-> round_learning_labels
+-> TrainingDatasetBuilder / TrainingDataReport
+```
+
+The label builder does not predict outcomes, train models, create ToolTasks,
+change ranking, or alter governance. The current round value rules are:
+
+- new finding: +1
+- new CVE: +2
+- new critical finding: +3
+- risk increase: +1
+- confidence increase: +1
+- no change: 0
+- tool timeout: -1
+- duplicate finding: -1
+
 Safety constraints:
 
 - Ranking receives candidate tools only; it never creates candidates.
