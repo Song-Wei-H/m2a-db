@@ -162,6 +162,7 @@ class TargetReportResponse(BaseModel):
     auto_loop_decisions: list[dict[str, Any]] = Field(default_factory=list)
     learning_feedback_summary: dict[str, Any] = Field(default_factory=dict)
     learning_summary: list[dict[str, Any]] = Field(default_factory=list)
+    learning_ranking_summary: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class TargetSummaryResponse(ReportTargetSummaryResponse):

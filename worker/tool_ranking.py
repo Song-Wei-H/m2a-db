@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from worker.learning_context import LearningContext
@@ -14,6 +14,7 @@ class ToolRank:
     tool_name: str
     score: float
     reason: str
+    metadata: dict[str, float | str] = field(default_factory=dict)
 
 
 class ToolRankingStrategy(Protocol):

@@ -72,9 +72,17 @@ async def test_decision_snapshot_contains_learning_metadata():
 
     decision_result = results[0]["decision_result"]
     assert decision_result["candidate_tools"] == ["nuclei_safe"]
-    assert decision_result["selection_strategy"] in {"LearningRanking", "DeterministicRanking"}
+    assert decision_result["selection_strategy"] in {"HybridRanking", "DeterministicRanking"}
     assert decision_result["learning_context"]["previous_tool"] == "httpx_basic"
     assert decision_result["tool_rank_scores"][0]["tool_name"] == "nuclei_safe"
+    assert "ranking_algorithm" in decision_result
+    if decision_result["selection_strategy"] == "HybridRanking":
+        rank = decision_result["tool_rank_scores"][0]
+        assert "offline_prior_score" in rank
+        assert "ucb_score" in rank
+        assert "hybrid_score" in rank
+        assert "prior_weight" in rank
+        assert "online_weight" in rank
 
     added_decisions = [
         call.args[0]
@@ -86,3 +94,4 @@ async def test_decision_snapshot_contains_learning_metadata():
     assert snapshot["candidate_tools"] == ["nuclei_safe"]
     assert snapshot["learning_context"]["previous_tool"] == "httpx_basic"
     assert snapshot["selection_reason"]
+    assert "ranking_algorithm" in snapshot

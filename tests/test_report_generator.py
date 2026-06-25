@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from worker.report_generator import generate_target_report
+from worker.report_generator import generate_target_report, _learning_ranking_summary
 
 
 class FakeScalarResult:
@@ -462,3 +462,32 @@ async def test_report_remediation_flags_follow_next_action():
     assert by_action["Needs follow-up"]["requires_remediation"] is False
     assert by_action["Needs follow-up"]["requires_followup"] is True
     assert by_action["Needs follow-up"]["no_further_action"] is False
+
+
+def test_learning_ranking_summary_exposes_hybrid_metadata():
+    decision = row(
+        id=10,
+        input_snapshot={
+            "selection_strategy": "HybridRanking",
+            "selection_reason": "advisory ranking only",
+            "ranking_algorithm": "HybridRanking(UCB1)",
+            "ranking_version": "hybrid-ranking-v1",
+            "tool_rank_scores": [
+                {
+                    "tool_name": "nuclei_safe",
+                    "offline_prior_score": 0.85,
+                    "ucb_score": 1.2,
+                    "hybrid_score": 0.955,
+                    "prior_weight": 0.7,
+                    "online_weight": 0.3,
+                }
+            ],
+        },
+    )
+
+    summary = _learning_ranking_summary([decision])
+
+    assert summary[0]["ranking_algorithm"] == "HybridRanking(UCB1)"
+    assert summary[0]["tool_rank_scores"][0]["offline_prior_score"] == 0.85
+    assert summary[0]["tool_rank_scores"][0]["ucb_score"] == 1.2
+    assert summary[0]["tool_rank_scores"][0]["hybrid_score"] == 0.955

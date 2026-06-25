@@ -15,11 +15,12 @@ from worker.confidence_scoring import calculate_confidence
 from worker.cve_enrichment import summarize_cve_risk
 from worker.evidence_normalizer import normalize_tool_result
 from worker.learning_engine import get_learning_feedback, record_learning_feedback
+from worker.hybrid_ranking import HybridRanking
 from worker.learning_context import LearningContext
 from worker.learning_statistics import LearningStatisticsProvider
 from worker.mitre_mapper import map_to_mitre
 from worker.risk_engine_v3 import calculate_risk
-from worker.tool_ranking import DeterministicRanking, LearningRanking, ToolRank
+from worker.tool_ranking import DeterministicRanking, ToolRank
 from worker.tool_name_normalizer import normalize_tool_name
 from worker.auto_loop import get_next_tool_task
 
@@ -66,7 +67,7 @@ async def _build_learning_metadata(
 
     try:
         provider = LearningStatisticsProvider(session)
-        ranks = await LearningRanking(provider).rank_tools(
+        ranks = await HybridRanking(statistics=provider).rank_tools(
             candidate_tools=candidate_tools,
             context=context,
         )
@@ -74,7 +75,7 @@ async def _build_learning_metadata(
             context=context,
             candidate_tools=candidate_tools,
             ranks=ranks,
-            strategy="LearningRanking",
+            strategy="HybridRanking",
             reason="advisory ranking only; deterministic selection preserved",
         )
     except Exception as exc:
@@ -104,11 +105,14 @@ def _learning_metadata_payload(
                 "tool_name": rank.tool_name,
                 "score": rank.score,
                 "reason": rank.reason,
+                **rank.metadata,
             }
             for rank in ranks
         ],
         "selection_strategy": strategy,
         "selection_reason": reason,
+        "ranking_algorithm": ranks[0].metadata.get("ranking_algorithm") if ranks else strategy,
+        "ranking_version": ranks[0].metadata.get("ranking_version") if ranks else "deterministic-v1",
     }
 
 
