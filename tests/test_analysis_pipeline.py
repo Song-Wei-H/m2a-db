@@ -165,8 +165,8 @@ async def test_decision_engine_remediate_kev_without_next_tool():
 
 
 @pytest.mark.asyncio
-async def test_decision_engine_continues_when_high_risk_has_next_tool():
-    """Test that high risk with a next tool remains a governed continuation."""
+async def test_decision_engine_verifies_high_risk_before_next_tool_continue():
+    """Test that high risk verifies before governed follow-up execution."""
     fake_session = make_fake_session()
     with patch("worker.analysis_pipeline.get_next_tool_task", new_callable=AsyncMock) as mock_generate, \
          patch("worker.analysis_pipeline.async_session", return_value=FakeAsyncSessionContext(fake_session)), \
@@ -209,7 +209,7 @@ async def test_decision_engine_continues_when_high_risk_has_next_tool():
         )
 
         result = results[0]
-        assert result["decision_result"]["recommended_action"] == "continue"
+        assert result["decision_result"]["recommended_action"] == "verify"
 
 
 @pytest.mark.asyncio
