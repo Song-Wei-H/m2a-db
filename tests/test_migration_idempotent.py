@@ -3,6 +3,7 @@ from pathlib import Path
 
 MIGRATIONS_TO_CHECK = [
     Path("initdb/020_architecture_hardening.sql"),
+    Path("initdb/021_tooltask_lifecycle_alignment.sql"),
     Path("initdb/duplicate_audit.sql"),
     Path("initdb/dedupe.sql"),
 ]

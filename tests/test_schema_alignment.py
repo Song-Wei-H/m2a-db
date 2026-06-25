@@ -5,6 +5,10 @@ from app.models import ToolTask
 
 
 REQUIRED_TOOL_TASK_COLUMNS = {
+    "target_id",
+    "open_port_id",
+    "decision_score_id",
+    "tool_run",
     "approval_required",
     "approval_status",
     "approval_reason",
