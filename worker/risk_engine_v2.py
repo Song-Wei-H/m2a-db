@@ -303,39 +303,38 @@ def decide_next_action(
     max_epss: float | None,
     cvss: float | None,
 ) -> str:
-    # Consistency rule: if a next tool exists, the decision is to continue.
-    # Approval and execution gating are enforced later by the governed auto loop.
-    if next_tool is not None:
-        return "continue"
+    # Rule 1: blocker / insufficient or failed runtime signal.
+    if tool_timeout and base_risk_score < 4:
+        return "stop"
+    if (tool_blocked or waf_detected or tool_timeout) and base_risk_score >= 4:
+        return "verify"
+    if confidence_score < 0.3 and adjusted_risk_score < 4:
+        return "stop"
 
-    # Priority 1: KEV or CVSS >= 9.0
+    # Rule 2: critical KEV.
     if kev_detected:
         return "remediate"
-    
+
+    # Rule 3: critical CVSS.
     if cvss is not None and cvss >= 9.0:
         return "remediate"
-    
-    # Priority 2: Verification required conditions
-    if base_risk_score >= 6 and confidence_score < 0.5:
-        return "verify"
 
-    if waf_detected or tool_blocked or tool_timeout:
-        if base_risk_score >= 6:
-            return "verify"
-    
+    # Rule 4: high EPSS.
     if max_epss is not None and max_epss >= 0.8:
         return "verify"
 
-    if severity == "critical":
+    # Rule 5: verification needed.
+    if base_risk_score >= 6 and confidence_score < 0.5:
+        return "verify"
+    if severity in {"critical", "high"}:
         return "verify"
 
-    if severity == "high":
-        return "verify"
+    # Rule 6: discovery or follow-up tool can continue only after higher
+    # priority remediate/verify rules had a chance to fire.
+    if next_tool is not None:
+        return "continue"
 
-    # Priority 4: No tool available
-    if severity == "low":
-        return "stop"
-    
+    # Rule 7: stop.
     return "stop"
 
 

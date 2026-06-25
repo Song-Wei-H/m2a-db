@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.database import async_session
 from app.models import AutoLoopDecision, DecisionScore, EvidenceConfidence, NormalizedResult, OpenPort, Target, ToolTask
+from app.tool_task_writer import create_tool_task_if_not_exists
 from worker.confidence_scoring import calculate_confidence
 from worker.cve_enrichment import summarize_cve_risk
 from worker.evidence_normalizer import normalize_tool_result
@@ -304,7 +305,8 @@ async def _generate_tasks_from_nmap_open_ports(target_id: int) -> list[dict[str,
                 )
                 continue
 
-            task = ToolTask(
+            task, inserted = await create_tool_task_if_not_exists(
+                db,
                 target_id=target_id,
                 open_port_id=port.id,
                 tool_name=next_tool,
@@ -315,17 +317,14 @@ async def _generate_tasks_from_nmap_open_ports(target_id: int) -> list[dict[str,
                 decision_score_id=decision.id,
             )
 
-            db.add(task)
-            await db.flush()
-
             results.append(
                 {
-                    "generated": True,
+                    "generated": inserted,
                     "tool_name": next_tool,
                     "open_port_id": port.id,
                     "port": port.port,
                     "service": port.service,
-                    "task_id": task.id,
+                    "task_id": task.id if task else None,
                     "decision_score_id": decision.id,
                 }
             )

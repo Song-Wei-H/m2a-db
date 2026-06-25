@@ -91,7 +91,7 @@ async def reject_task(
     task.approval_status = "rejected"
     task.approved_at = datetime.utcnow()
     task.approved_by = body.approved_by if body else "human"
-    task.approval_reason = (
+    task.reject_reason = (
         body.reason
         if body and body.reason
         else "Rejected by human"

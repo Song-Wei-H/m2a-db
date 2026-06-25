@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from app.database import async_session
 from app.models import ToolRegistry, ToolTask
+from app.tool_task_writer import create_tool_task_if_not_exists
 from worker.tool_name_normalizer import TOOL_ALIASES
 from worker.tool_request_manager import create_tool_request
 
@@ -183,7 +184,8 @@ async def generate_tool_task(
 
 
     async with async_session() as session, session.begin():
-        task = ToolTask(
+        task, inserted = await create_tool_task_if_not_exists(
+            session,
             target_id=target_id,
             open_port_id=open_port_id,
             decision_score_id=decision_score_id,
@@ -196,11 +198,13 @@ async def generate_tool_task(
             approval_status=approval_status,
             approval_reason=approval_reason or None,
         )
-
-        session.add(task)
-        await session.flush()
-
-        task_id = task.id
+        task_id = task.id if task else None
+        if not inserted:
+            return {
+                "action": "skipped_duplicate",
+                "tool_name": recommended_tool,
+                "existing_task_id": task_id,
+            }
 
     return {
         "action": "tool_task_created",

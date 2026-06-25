@@ -48,6 +48,7 @@ from app.mitre_rules import (
     select_next_tool,
 )
 from app.security.tool_policy import resolve_template_tool
+from app.tool_task_writer import create_tool_task_if_not_exists
 from app.models import (
     CveEnrichment,
     DecisionScore,
@@ -297,7 +298,8 @@ async def run_decision_for_target(
                 template_tool = None
 
             if template_tool:
-                task = ToolTask(
+                task, _ = await create_tool_task_if_not_exists(
+                    db,
                     target_id=target_id,
                     open_port_id=focus.id if focus else None,
                     decision_score_id=decision_row.id,
@@ -309,10 +311,7 @@ async def run_decision_for_target(
                     approval_reason=approval_reason,
                 )
 
-                db.add(task)
-                await db.flush()
-
-                tool_task_id = task.id
+                tool_task_id = task.id if task else None
 
         return DecisionResult(
             target_id=target_id,

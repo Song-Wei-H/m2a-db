@@ -6,6 +6,7 @@ from sqlalchemy import select, update
 
 from app.database import async_session
 from app.models import DecisionScore, LlmRecommendation, ToolTask
+from app.tool_task_writer import create_tool_task_if_not_exists
 
 
 ALLOWED_ACTIONS_TO_TASK = {"verify", "continue"}
@@ -53,7 +54,8 @@ async def generate_task_from_llm_recommendation(
         if exists:
             return exists.id
 
-        task = ToolTask(
+        task, _ = await create_tool_task_if_not_exists(
+            db,
             target_id=recommendation.target_id,
             open_port_id=decision.open_port_id,
             decision_score_id=decision.id,
@@ -70,10 +72,7 @@ async def generate_task_from_llm_recommendation(
             ),
         )
 
-        db.add(task)
-        await db.flush()
-
-        return task.id
+        return task.id if task else None
 
 
 async def generate_latest_approved() -> int | None:

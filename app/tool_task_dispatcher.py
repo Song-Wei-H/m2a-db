@@ -21,6 +21,7 @@ from app.security.tool_policy import (
     validate_profile,
 )
 from app.tool_catalog import DEPTH_VALIDATION_TOOLS, SAFE_DISCOVERY_TOOLS
+from app.tool_task_writer import create_tool_task_if_not_exists
 
 def _determine_approval_from_risk_level(tool_name: str, risk_level: str) -> tuple[bool, str, str | None]:
     if tool_name in SAFE_DISCOVERY_TOOLS:
@@ -223,7 +224,8 @@ async def dispatch_llm_tool_proposal(
             message="Tool not registered; request created" if reg_row is None else "Tool disabled; request created",
         )
     # Continue normal creation
-    task = ToolTask(
+    task, inserted = await create_tool_task_if_not_exists(
+        db,
         target_id=target_id,
         open_port_id=open_port_id,
         tool_name=template_tool,
@@ -233,19 +235,25 @@ async def dispatch_llm_tool_proposal(
         approval_status=approval_status,
         approval_reason=approval_reason,
     )
-    db.add(task)
-    await db.flush()
+    if not inserted:
+        return DispatchResult(
+            accepted=True,
+            tool_task_id=task.id if task else None,
+            status="skipped_duplicate",
+            message="ToolTask already exists",
+            proposal=proposal,
+        )
 
     logger.info(
         "tool_task accepted id=%s tool=%s target=%s profile=%s",
-        task.id,
+        task.id if task else None,
         template_tool,
         proposal.target,
         profile,
     )
     return DispatchResult(
         accepted=True,
-        tool_task_id=task.id,
+        tool_task_id=task.id if task else None,
         status="pending",
         message=proposal.reason,
         proposal=proposal,

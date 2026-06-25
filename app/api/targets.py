@@ -15,6 +15,7 @@ from app.schemas import (
     TargetSummaryResponse,
     ToolResultResponse,
 )
+from app.tool_task_writer import create_tool_task_if_not_exists
 from worker.report_generator import generate_target_report
 
 router = APIRouter(tags=["targets"])
@@ -197,16 +198,15 @@ async def create_target(
         scan_run.target_id = target.id
         db.add(scan_run)
         await db.flush()
-        db.add(
-            ToolTask(
-                target_id=target.id,
-                open_port_id=None,
-                tool_name="nmap_service",
-                status="pending",
-                priority=50,
-                approval_required=False,
-                approval_status="not_required",
-            )
+        await create_tool_task_if_not_exists(
+            db,
+            target_id=target.id,
+            open_port_id=None,
+            tool_name="nmap_service",
+            status="pending",
+            priority=50,
+            approval_required=False,
+            approval_status="not_required",
         )
 
     if scan_run.id is None or target.id is None:

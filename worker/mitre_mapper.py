@@ -21,9 +21,9 @@ _CONTENT_TACTIC = "Discovery"
 _CONTENT_TECH_ID = "T1083"
 _CONTENT_TECH_NAME = "File and Directory Discovery"
 
-_SSH_TACTIC = "Lateral Movement"
-_SSH_TECH_ID = "T1021"
-_SSH_TECH_NAME = "Remote Services"
+_SSH_TACTIC = "Discovery"
+_SSH_TECH_ID = "T1046"
+_SSH_TECH_NAME = "Network Service Discovery"
 
 _DB_TACTIC = "Collection"
 _DB_TECH_ID = "T1213"

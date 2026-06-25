@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 # ; | & ` $ ( ) > < newline carriage-return
 DANGEROUS_PATTERN = re.compile(r"[;|&`$()><\r\n]")
+PATH_TRAVERSAL_PATTERN = re.compile(
+    r"(\.\.|%2e|%2f|%5c)",
+    re.IGNORECASE,
+)
 FORBIDDEN_FIELD_NAMES = frozenset(
     {
         "command",
@@ -23,7 +28,13 @@ FORBIDDEN_FIELD_NAMES = frozenset(
 
 
 def contains_dangerous_chars(value: str) -> bool:
-    return DANGEROUS_PATTERN.search(value) is not None
+    if "\x00" in value:
+        return True
+    if DANGEROUS_PATTERN.search(value) is not None:
+        return True
+    if PATH_TRAVERSAL_PATTERN.search(value) is not None:
+        return True
+    return any(unicodedata.category(char) in {"Cc", "Cf"} for char in value)
 
 
 def assert_safe_string(value: str, field_name: str) -> str:
@@ -33,7 +44,7 @@ def assert_safe_string(value: str, field_name: str) -> str:
     if contains_dangerous_chars(cleaned):
         raise ValueError(
             f"{field_name} contains forbidden characters "
-            "(; | & ` $ ( ) > < newline)"
+            "(; | & ` $ ( ) > < newline, path traversal, or control characters)"
         )
     return cleaned
 

@@ -50,16 +50,24 @@ class ToolChoice:
 
 SERVICE_MITRE: dict[str, MitreMapping] = {
     "ssh": MitreMapping("Discovery", "T1046", "Network Service Discovery"),
-    "http": MitreMapping("Discovery", "T1046", "Network Service Discovery"),
-    "https": MitreMapping("Discovery", "T1046", "Network Service Discovery"),
-    "mysql": MitreMapping("Discovery", "T1046", "Network Service Discovery"),
-    "ms-sql": MitreMapping("Discovery", "T1046", "Network Service Discovery"),
+    "http": MitreMapping("Initial Access", "T1190", "Exploit Public-Facing Application"),
+    "https": MitreMapping("Initial Access", "T1190", "Exploit Public-Facing Application"),
+    "http-proxy": MitreMapping("Initial Access", "T1190", "Exploit Public-Facing Application"),
+    "ssl/http": MitreMapping("Initial Access", "T1190", "Exploit Public-Facing Application"),
+    "ssl/https": MitreMapping("Initial Access", "T1190", "Exploit Public-Facing Application"),
+    "http-alt": MitreMapping("Initial Access", "T1190", "Exploit Public-Facing Application"),
+    "https-alt": MitreMapping("Initial Access", "T1190", "Exploit Public-Facing Application"),
+    "mysql": MitreMapping("Collection", "T1213", "Data from Information Repositories"),
+    "mariadb": MitreMapping("Collection", "T1213", "Data from Information Repositories"),
+    "ms-sql": MitreMapping("Collection", "T1213", "Data from Information Repositories"),
     "rdp": MitreMapping("Discovery", "T1046", "Network Service Discovery"),
     "ftp": MitreMapping("Discovery", "T1046", "Network Service Discovery"),
 }
 
 DEFAULT_MITRE = MitreMapping("Discovery", "T1046", "Network Service Discovery")
 KEV_MITRE = MitreMapping("Initial Access", "T1190", "Exploit Public-Facing Application")
+DIRECTORY_ENUMERATION_MITRE = MitreMapping("Discovery", "T1083", "File and Directory Discovery")
+NUCLEI_MITRE = MitreMapping("Initial Access", "T1190", "Exploit Public-Facing Application")
 
 
 def normalize_service(service: str | None) -> str:
@@ -112,6 +120,23 @@ def map_service_to_mitre(
     if port == 3306:
         return SERVICE_MITRE["mysql"]
 
+    return DEFAULT_MITRE
+
+
+def map_tool_to_mitre(tool_name: str | None, evidence_type: str | None = None) -> MitreMapping:
+    tool = (tool_name or "").strip().lower()
+    evidence = (evidence_type or "").strip().lower()
+
+    if tool in {"dirb", "dirb_safe"} or evidence == "content_discovery":
+        return DIRECTORY_ENUMERATION_MITRE
+    if tool in {"nuclei", "nuclei_safe"} or evidence in {"vulnerability", "vulnerability_scan_negative"}:
+        return NUCLEI_MITRE
+    if tool in {"httpx", "httpx_basic"} or evidence == "http_service":
+        return SERVICE_MITRE["http"]
+    if tool in {"ssh-enum", "ssh_enum"} or evidence == "ssh_service":
+        return SERVICE_MITRE["ssh"]
+    if tool in {"mysql-info", "mysql_info"} or evidence == "database_service":
+        return SERVICE_MITRE["mysql"]
     return DEFAULT_MITRE
 
 
