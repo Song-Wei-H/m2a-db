@@ -17,12 +17,14 @@ from worker.evidence_normalizer import normalize_tool_result
 from worker.learning_engine import get_learning_feedback, record_learning_feedback
 from worker.hybrid_ranking import HybridRanking
 from worker.learning_context import LearningContext
+from worker.learning_pipeline import LearningPipeline, LearningPipelineResult
 from worker.learning_statistics import LearningStatisticsProvider
 from worker.mitre_mapper import map_to_mitre
 from worker.risk_engine_v3 import calculate_risk
 from worker.feature_builder import FEATURE_VECTOR_VERSION
 from worker.round_label_builder import calculate_round_value
 from worker.round_learning_label import LABEL_VERSION
+from worker.training_repository import PostgreSQLTrainingRepository
 from worker.tool_ranking import DeterministicRanking, ToolRank
 from worker.tool_name_normalizer import normalize_tool_name
 from worker.auto_loop import get_next_tool_task
@@ -117,6 +119,68 @@ def _learning_metadata_payload(
         "ranking_algorithm": ranks[0].metadata.get("ranking_algorithm") if ranks else strategy,
         "ranking_version": ranks[0].metadata.get("ranking_version") if ranks else "deterministic-v1",
     }
+
+
+async def _record_runtime_learning_round(
+    *,
+    db,
+    target_id: int,
+    open_port_id: int | None,
+    tool_name: str,
+    evidence: dict[str, Any] | None,
+    decision_result: dict[str, Any],
+    risk_v3: Any | None,
+    cve_count: int = 0,
+    learning_score: float | None = None,
+) -> LearningPipelineResult:
+    target = await db.get(Target, target_id)
+    current_round = int(getattr(target, "current_round", None) or 0)
+    max_round = int(getattr(target, "max_round", None) or getattr(target, "max_rounds", None) or 0)
+    evidence = evidence or {}
+    details = evidence.get("details") if isinstance(evidence.get("details"), dict) else {}
+    service = details.get("service") or evidence.get("service")
+    evidence_type = evidence.get("evidence_type")
+
+    next_state = {
+        "finding_count": 1 if evidence else 0,
+        "cve_count": cve_count,
+        "open_port_count": 0,
+        "evidence_count": 1 if evidence else 0,
+        "risk_score": getattr(risk_v3, "risk_score", decision_result.get("risk_score")),
+        "confidence": getattr(risk_v3, "confidence_score", None),
+        "critical_count": 1 if getattr(risk_v3, "severity", None) == "critical" else 0,
+        "tool_timeout": bool(getattr(risk_v3, "tool_timeout", False)),
+        "learning_score": learning_score,
+        "service": service,
+        "evidence_type": evidence_type,
+    }
+    target_state = {
+        "open_port_count": 1 if open_port_id is not None else 0,
+        "vuln_count": 1 if evidence else 0,
+        "avg_cvss": (decision_result.get("risk_factors") or {}).get("base_risk_score", 0.0),
+        "has_kev": False,
+        "service_count": 1 if service else 0,
+        "evidence_count": 1 if evidence else 0,
+        "current_round": current_round,
+        "max_round": max_round,
+        "learning_score": learning_score,
+        "waf_detected": bool(getattr(risk_v3, "waf_detected", False)),
+    }
+    decision_snapshot = {
+        **decision_result,
+        "selected_tool": decision_result.get("recommended_tool"),
+        "next_tool": decision_result.get("recommended_tool"),
+    }
+    pipeline = LearningPipeline(PostgreSQLTrainingRepository(db))
+    return await pipeline.record_round(
+        target_id=target_id,
+        round_number=current_round,
+        tool_name=tool_name,
+        current_state={},
+        next_state=next_state,
+        target_state=target_state,
+        decision_snapshot=decision_snapshot,
+    )
 
 
 def _score_open_port(port: OpenPort) -> dict[str, Any]:
@@ -268,6 +332,52 @@ async def _generate_tasks_from_nmap_open_ports(target_id: int) -> list[dict[str,
                     f"match_confidence={cve_summary.best_match_confidence}."
                 )
 
+            nmap_decision_result = {
+                "recommended_tool": risk_v3.next_tool,
+                "recommended_action": risk_v3.next_action,
+                "priority": (
+                    100 if risk_v3.severity == "critical"
+                    else 80 if risk_v3.severity == "high"
+                    else 50 if risk_v3.severity == "medium"
+                    else 10
+                ),
+                "requires_approval": risk_v3.next_action in {"verify", "remediate"},
+                "risk_score": risk_v3.risk_score,
+                "risk_factors": {
+                    "base_risk_score": risk_v3.base_risk_score,
+                    "adjusted_risk_score": risk_v3.adjusted_risk_score,
+                    "confidence_score": risk_v3.confidence_score,
+                    "learning_adjustment": risk_v3.learning_adjustment,
+                    "runtime_adjustment": risk_v3.runtime_adjustment,
+                    "evidence_adjustment": risk_v3.evidence_adjustment,
+                    "waf_detected": risk_v3.waf_detected,
+                    "tool_blocked": risk_v3.tool_blocked,
+                    "tool_timeout": risk_v3.tool_timeout,
+                },
+                "reasoning": risk_v3.reasoning,
+            }
+            learning_pipeline_result = await _record_runtime_learning_round(
+                db=db,
+                target_id=target_id,
+                open_port_id=port.id,
+                tool_name="nmap_service",
+                evidence={
+                    "evidence_type": "open_port",
+                    "service": port.service,
+                    "details": {
+                        "port": port.port,
+                        "protocol": port.protocol,
+                        "service": port.service,
+                        "product": port.product,
+                        "version": port.version,
+                    },
+                },
+                decision_result=nmap_decision_result,
+                risk_v3=risk_v3,
+                cve_count=int(cve_summary.cve_count or 0),
+                learning_score=(feedback or {}).get("success_rate") if isinstance(feedback, dict) else None,
+            )
+
             decision = DecisionScore(
                 target_id=target_id,
                 open_port_id=port.id,
@@ -316,6 +426,7 @@ async def _generate_tasks_from_nmap_open_ports(target_id: int) -> list[dict[str,
                         "best_match_type": cve_summary.best_match_type,
                         "best_match_confidence": cve_summary.best_match_confidence,
                     },
+                    **learning_pipeline_result.metadata(),
                 },
             )
 
@@ -485,6 +596,45 @@ async def analyze_tool_result_and_generate_task(
             )
 
             async with async_session() as db, db.begin():
+                decision_result = {
+                    "recommended_tool": risk_v3.next_tool,
+                    "recommended_action": risk_v3.next_action,
+                    "priority": (
+                        100 if risk_v3.severity == "critical"
+                        else 80 if risk_v3.severity == "high"
+                        else 50 if risk_v3.severity == "medium"
+                        else 10
+                    ),
+                    "requires_approval": risk_v3.next_action in {"verify", "remediate"},
+                    "risk_score": risk_v3.risk_score,
+                    "risk_factors": {
+                        "base_risk_score": risk_v3.base_risk_score,
+                        "adjusted_risk_score": risk_v3.adjusted_risk_score,
+                        "confidence_score": risk_v3.confidence_score,
+                        "learning_adjustment": risk_v3.learning_adjustment,
+                        "runtime_adjustment": risk_v3.runtime_adjustment,
+                        "evidence_adjustment": risk_v3.evidence_adjustment,
+                        "waf_detected": risk_v3.waf_detected,
+                        "tool_blocked": risk_v3.tool_blocked,
+                        "tool_timeout": risk_v3.tool_timeout,
+                    },
+                    "reasoning": risk_v3.reasoning,
+                }
+                learning_pipeline_result = await _record_runtime_learning_round(
+                    db=db,
+                    target_id=target_id,
+                    open_port_id=open_port_id,
+                    tool_name=tool_name,
+                    evidence={
+                        "evidence_type": "vulnerability_scan_negative",
+                        "service": port_row.service if port_row else None,
+                        "details": {"finding_count": 0},
+                    },
+                    decision_result=decision_result,
+                    risk_v3=risk_v3,
+                    cve_count=int((cve_summary.cve_count if cve_summary else 0) or 0),
+                    learning_score=(feedback or {}).get("success_rate") if isinstance(feedback, dict) else None,
+                )
                 evidence_confidence = EvidenceConfidence(
                     target_id=target_id,
                     open_port_id=open_port_id,
@@ -569,6 +719,7 @@ async def analyze_tool_result_and_generate_task(
                         "tool_result_id": tool_result_id,
                         "learning_feedback": feedback,
                         "parsed_output": parsed_output,
+                        **learning_pipeline_result.metadata(),
                     },
                 )
 
@@ -577,33 +728,7 @@ async def analyze_tool_result_and_generate_task(
 
                 new_decision_score_id = decision.id
 
-            # Create decision result for auto loop
-            decision_result = {
-                "recommended_tool": risk_v3.next_tool,
-                "recommended_action": risk_v3.next_action,
-                "decision_score_id": new_decision_score_id,
-                "priority": (
-                    100 if risk_v3.severity == "critical"
-                    else 80 if risk_v3.severity == "high"
-                    else 50 if risk_v3.severity == "medium"
-                    else 10
-                ),
-                "requires_approval": risk_v3.next_action
-                in {"verify", "remediate"},
-                "risk_score": risk_v3.risk_score,
-                "risk_factors": {
-                    "base_risk_score": risk_v3.base_risk_score,
-                    "adjusted_risk_score": risk_v3.adjusted_risk_score,
-                    "confidence_score": risk_v3.confidence_score,
-                    "learning_adjustment": risk_v3.learning_adjustment,
-                    "runtime_adjustment": risk_v3.runtime_adjustment,
-                    "evidence_adjustment": risk_v3.evidence_adjustment,
-                    "waf_detected": risk_v3.waf_detected,
-                    "tool_blocked": risk_v3.tool_blocked,
-                    "tool_timeout": risk_v3.tool_timeout,
-                },
-                "reasoning": risk_v3.reasoning,
-            }
+            decision_result["decision_score_id"] = new_decision_score_id
 
             # Integrate auto loop functionality after DecisionScore is created
             task_result = await get_next_tool_task(
@@ -631,6 +756,23 @@ async def analyze_tool_result_and_generate_task(
 
     if not evidence_list:
         async with async_session() as db, db.begin():
+            decision_result = {
+                "recommended_tool": None,
+                "recommended_action": "stop",
+                "priority": 0,
+                "requires_approval": False,
+                "risk_score": 0.0,
+                "reasoning": ["No normalized evidence was produced by the parser/normalizer"],
+            }
+            learning_pipeline_result = await _record_runtime_learning_round(
+                db=db,
+                target_id=target_id,
+                open_port_id=open_port_id,
+                tool_name=tool_name,
+                evidence=None,
+                decision_result=decision_result,
+                risk_v3=None,
+            )
             decision = DecisionScore(
                 target_id=target_id,
                 open_port_id=open_port_id,
@@ -658,6 +800,7 @@ async def analyze_tool_result_and_generate_task(
                     "tool_result_id": tool_result_id,
                     "previous_decision_score_id": decision_score_id,
                     "parsed_output": parsed_output,
+                    **learning_pipeline_result.metadata(),
                 },
             )
             db.add(decision)
@@ -667,15 +810,7 @@ async def analyze_tool_result_and_generate_task(
         task_result = await get_next_tool_task(
             target_id=target_id,
             open_port_id=open_port_id,
-            decision_result={
-                "recommended_tool": None,
-                "recommended_action": "stop",
-                "decision_score_id": new_decision_score_id,
-                "priority": 0,
-                "requires_approval": False,
-                "risk_score": 0.0,
-                "reasoning": ["No normalized evidence was produced by the parser/normalizer"],
-            },
+            decision_result={**decision_result, "decision_score_id": new_decision_score_id},
         )
 
         return [
@@ -813,6 +948,17 @@ async def analyze_tool_result_and_generate_task(
                 evidence.get("evidence_type"),
                 decision_score_id,
             )
+            learning_pipeline_result = await _record_runtime_learning_round(
+                db=db,
+                target_id=target_id,
+                open_port_id=open_port_id,
+                tool_name=tool_name,
+                evidence=evidence,
+                decision_result=decision_result,
+                risk_v3=risk_v3,
+                cve_count=int((cve_summary.cve_count if cve_summary else 0) or 0),
+                learning_score=(feedback or {}).get("success_rate") if isinstance(feedback, dict) else None,
+            )
 
             db.add(evidence_confidence)
             db.add(
@@ -869,6 +1015,7 @@ async def analyze_tool_result_and_generate_task(
                     "round_value": round_value,
                     "feature_vector_version": FEATURE_VECTOR_VERSION,
                     "label_version": LABEL_VERSION,
+                    **learning_pipeline_result.metadata(),
                     **learning_metadata,
                 },
             )

@@ -30,13 +30,19 @@ async def build_dataset(session: AsyncSession) -> list[dict[str, Any]]:
                 new_open_port,
                 evidence_delta,
                 learning_score,
-                round_value
+                round_value,
+                feature_vector,
+                label_payload,
+                dataset_version,
+                feature_version,
+                label_version,
+                created_at
             FROM round_learning_labels
             ORDER BY target_id, round_number, id
             """
         )
     )
-    return [dict(_mapping(row)) for row in result.fetchall()]
+    return [_merge_feature_vector(dict(_mapping(row))) for row in result.fetchall()]
 
 
 def build_feature_matrix(dataset: list[dict[str, Any]]) -> list[list[Any]]:
@@ -78,3 +84,11 @@ def _mapping(row: Any) -> dict[str, Any]:
     if isinstance(row, dict):
         return row
     return dict(row)
+
+
+def _merge_feature_vector(row: dict[str, Any]) -> dict[str, Any]:
+    feature_vector = row.get("feature_vector")
+    if isinstance(feature_vector, dict):
+        for key, value in feature_vector.items():
+            row.setdefault(key, value)
+    return row

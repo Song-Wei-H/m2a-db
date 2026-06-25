@@ -16,6 +16,10 @@ CREATE TABLE IF NOT EXISTS round_learning_labels (
   evidence_delta INT NOT NULL DEFAULT 0,
   learning_score FLOAT,
   round_value FLOAT NOT NULL DEFAULT 0,
+  feature_vector JSONB NOT NULL DEFAULT '{}'::jsonb,
+  label_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dataset_version VARCHAR(50) NOT NULL DEFAULT 'round-dataset-v1',
+  feature_version VARCHAR(50) NOT NULL DEFAULT 'round-feature-v1',
   label_version VARCHAR(50) NOT NULL DEFAULT 'round-label-v1',
   feature_vector_version VARCHAR(50) NOT NULL DEFAULT 'round-feature-v1',
   created_at TIMESTAMP DEFAULT NOW()
@@ -36,6 +40,10 @@ ALTER TABLE round_learning_labels ADD COLUMN IF NOT EXISTS new_open_port INT NOT
 ALTER TABLE round_learning_labels ADD COLUMN IF NOT EXISTS evidence_delta INT NOT NULL DEFAULT 0;
 ALTER TABLE round_learning_labels ADD COLUMN IF NOT EXISTS learning_score FLOAT;
 ALTER TABLE round_learning_labels ADD COLUMN IF NOT EXISTS round_value FLOAT NOT NULL DEFAULT 0;
+ALTER TABLE round_learning_labels ADD COLUMN IF NOT EXISTS feature_vector JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE round_learning_labels ADD COLUMN IF NOT EXISTS label_payload JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE round_learning_labels ADD COLUMN IF NOT EXISTS dataset_version VARCHAR(50) NOT NULL DEFAULT 'round-dataset-v1';
+ALTER TABLE round_learning_labels ADD COLUMN IF NOT EXISTS feature_version VARCHAR(50) NOT NULL DEFAULT 'round-feature-v1';
 ALTER TABLE round_learning_labels ADD COLUMN IF NOT EXISTS label_version VARCHAR(50) NOT NULL DEFAULT 'round-label-v1';
 ALTER TABLE round_learning_labels ADD COLUMN IF NOT EXISTS feature_vector_version VARCHAR(50) NOT NULL DEFAULT 'round-feature-v1';
 ALTER TABLE round_learning_labels ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();

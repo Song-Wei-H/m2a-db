@@ -95,3 +95,7 @@ async def test_decision_snapshot_contains_learning_metadata():
     assert snapshot["learning_context"]["previous_tool"] == "httpx_basic"
     assert snapshot["selection_reason"]
     assert "ranking_algorithm" in snapshot
+    assert snapshot["dataset_version"] == "round-dataset-v1"
+    assert snapshot["feature_version"] == "round-feature-v1"
+    assert snapshot["label_version"] == "round-label-v1"
+    assert "dataset_row_id" in snapshot
