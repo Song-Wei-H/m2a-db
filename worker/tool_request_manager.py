@@ -27,7 +27,7 @@ async def create_tool_request(
             requested_tool=requested_tool,
             requested_capability=requested_capability,
             evidence_ref=evidence_ref,
-            reasoning_json=reasoning,
+            reasoning_json={"reasoning": reasoning},
             status="pending_review",
             reviewer=None,
             reviewed_at=None,

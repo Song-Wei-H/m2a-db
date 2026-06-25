@@ -20,9 +20,7 @@ from app.security.tool_policy import (
     resolve_template_tool,
     validate_profile,
 )
-
-SAFE_DISCOVERY_TOOLS = {"httpx_basic", "nmap_service", "ssh-enum", "mysql-info"}
-DEPTH_VALIDATION_TOOLS = {"nuclei_safe", "dirb_safe"}
+from app.tool_catalog import DEPTH_VALIDATION_TOOLS, SAFE_DISCOVERY_TOOLS
 
 def _determine_approval_from_risk_level(tool_name: str, risk_level: str) -> tuple[bool, str, str | None]:
     if tool_name in SAFE_DISCOVERY_TOOLS:
@@ -194,11 +192,22 @@ async def dispatch_llm_tool_proposal(
     reg_row = (await db.execute(reg_stmt)).scalar_one_or_none()
     if reg_row is None or not reg_row.enabled:
         # Create ToolRequest
+        request_status = "pending_review"
+        request_reason = "Tool not registered" if reg_row is None else "Tool disabled"
         req = ToolRequest(
-            tool_name=template_tool[:100],
-            status="pending",
-            requested_by="llm",
-            reason="Tool not registered" if reg_row is None else "Tool disabled",
+            requested_tool=template_tool[:100],
+            requested_capability="tool_execution",
+            evidence_ref=f"target_id={target_id};open_port_id={open_port_id}",
+            reasoning_json={
+                "reason": request_reason,
+                "requested_by": "llm",
+                "status": request_status,
+                "profile": profile,
+                "target_id": target_id,
+                "open_port_id": open_port_id,
+                "proposal_reason": proposal.reason,
+            },
+            status=request_status,
         )
         db.add(req)
         await db.flush()

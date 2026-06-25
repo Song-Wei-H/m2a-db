@@ -9,27 +9,12 @@ from app.mitre_rules import FORBIDDEN_TOOLS
 from app.security.dangerous_chars import assert_safe_string, reject_forbidden_keys
 from app.security.llm_schema import LlmToolProposal
 from app.security.scope import assert_target_in_scope
+from app.tool_catalog import CANONICAL_ALLOWED_TOOLS, LEGACY_TOOL_ALIASES
 
 # LLM-facing tool IDs (no shell, template-only on worker).
-LLM_ALLOWED_TOOLS = frozenset(
-    {
-        "nmap_service",
-        "httpx_basic",
-        "nuclei_safe",
-        "dirb_safe",
-    }
-)
-print("LOADED TOOL_POLICY", __file__)
-print("LLM_ALLOWED_TOOLS =", LLM_ALLOWED_TOOLS)
+LLM_ALLOWED_TOOLS = CANONICAL_ALLOWED_TOOLS
 
 # Decision engine / legacy task names mapped to templates.
-LEGACY_TOOL_ALIASES: dict[str, str] = {
-    "httpx": "httpx_basic",
-    "nuclei": "nuclei_safe",
-    "ssh-enum": "nmap_service",
-    "mysql-info": "nmap_service",
-    "dirb": "dirb_safe",
-}
 
 
 def resolve_template_tool(tool_name: str) -> str:

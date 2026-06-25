@@ -1,5 +1,7 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.tool_catalog import default_allowed_tools_value
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -16,8 +18,10 @@ class Settings(BaseSettings):
     worker_tool_timeout_seconds: int = 300
     dirb_wordlist: str = "/usr/share/dirb/wordlists/common.txt"
     allowed_scopes: str = "192.0.2.0/24,203.0.113.0/24"
+    allowed_hostnames: str = ""
+    allowed_domain_suffixes: str = ""
     allowed_llm_profiles: str = "internal"
-    allowed_tools: str = "nmap_service,httpx_basic,nuclei_safe"
+    allowed_tools: str = default_allowed_tools_value()
 
     @property
     def allowed_scopes_list(self) -> list[str]:
@@ -30,5 +34,13 @@ class Settings(BaseSettings):
     @property
     def allowed_tools_list(self) -> list[str]:
         return [s.strip().lower() for s in self.allowed_tools.split(",") if s.strip()]
+
+    @property
+    def allowed_hostnames_list(self) -> list[str]:
+        return [s.strip().lower() for s in self.allowed_hostnames.split(",") if s.strip()]
+
+    @property
+    def allowed_domain_suffixes_list(self) -> list[str]:
+        return [s.strip().lower().lstrip(".") for s in self.allowed_domain_suffixes.split(",") if s.strip()]
 
 settings = Settings()

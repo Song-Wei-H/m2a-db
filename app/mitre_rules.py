@@ -4,12 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.tool_catalog import (
+    MITRE_ALLOWED_TOOL_IDS,
+    MITRE_DEPTH_TOOL_IDS,
+    MITRE_DISCOVERY_TOOL_IDS,
+)
+
 # Allowed follow-up tools (no credential brute force).
-ALLOWED_TOOLS = frozenset({"httpx", "nuclei", "mysql-info", "ssh-enum", "none"})
+ALLOWED_TOOLS = MITRE_ALLOWED_TOOL_IDS
 # Initial safe enumeration — may continue even when risk_score is low.
-DISCOVERY_TOOLS = frozenset({"httpx", "ssh-enum", "mysql-info"})
+DISCOVERY_TOOLS = MITRE_DISCOVERY_TOOL_IDS
 # Deeper validation — requires risk_score threshold before continue/verify.
-DEPTH_TOOLS = frozenset({"nuclei", "dirb"})
+DEPTH_TOOLS = MITRE_DEPTH_TOOL_IDS
 FORBIDDEN_TOOLS = frozenset(
     {
         "hydra",

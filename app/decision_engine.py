@@ -10,17 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-SAFE_DISCOVERY_TOOLS = {
-    "httpx_basic",
-    "nmap_service",
-    "ssh-enum",
-    "mysql-info",
-}
-
-DEPTH_VALIDATION_TOOLS = {
-    "nuclei_safe",
-    "dirb_safe",
-}
+from app.tool_catalog import DEPTH_VALIDATION_TOOLS, SAFE_DISCOVERY_TOOLS
 
 
 def _determine_approval(
@@ -284,6 +274,9 @@ async def run_decision_for_target(
         tool_task_id: int | None = None
 
         if next_action in ("continue", "verify") and next_tool != "none":
+            approval_required = False
+            approval_status = "not_required"
+            approval_reason = None
             try:
                 template_tool = resolve_template_tool(next_tool)
 
