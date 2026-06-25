@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from app.database import async_session
 from app.models import ToolRegistry, ToolTask
+from app.tool_task_constants import ACTIVE_TASK_STATUSES, NOT_REQUIRED, PENDING, PENDING_APPROVAL
 from app.tool_task_writer import create_tool_task_if_not_exists
 from worker.tool_name_normalizer import TOOL_ALIASES
 from worker.tool_request_manager import create_tool_request
@@ -34,7 +35,7 @@ async def _existing_tool_task(
         query = select(ToolTask).where(
             ToolTask.target_id == target_id,
             ToolTask.tool_name == tool_name,
-            ToolTask.status.in_(["pending", "running", "completed"]),
+            ToolTask.status.in_(ACTIVE_TASK_STATUSES),
         )
         
         # Handle NULL values properly
@@ -176,7 +177,7 @@ async def generate_tool_task(
         or getattr(registry_row, "approval_required", False)
     )
 
-    approval_status = "pending_approval" if approval_required else "not_required"
+    approval_status = PENDING_APPROVAL if approval_required else NOT_REQUIRED
 
     approval_reason = "; ".join(
         _normalize_reasoning(decision_result.get("reasoning"))
@@ -190,7 +191,7 @@ async def generate_tool_task(
             open_port_id=open_port_id,
             decision_score_id=decision_score_id,
             tool_name=recommended_tool,
-            status="pending",
+            status=PENDING,
             priority=_safe_priority(
                 decision_result.get("priority")
             ),
@@ -210,7 +211,7 @@ async def generate_tool_task(
         "action": "tool_task_created",
         "tool_task_id": task_id,
         "tool_request_id": None,
-        "status": "pending",
+        "status": PENDING,
         "approval_required": approval_required,
         "approval_status": approval_status,
     }

@@ -1,7 +1,6 @@
-ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS approval_reason TEXT;
-ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS reject_reason TEXT;
-ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;
-ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS approved_by VARCHAR(255);
+-- Idempotent ToolTask lifecycle/schema alignment.
+-- Keeps ORM nullability in sync with the bootstrap schema and older migrations.
+
 ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS tool_run VARCHAR(100);
 
 ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'pending';
@@ -20,11 +19,7 @@ UPDATE tool_tasks SET approval_required = FALSE WHERE approval_required IS NULL;
 ALTER TABLE tool_tasks ALTER COLUMN approval_required SET DEFAULT FALSE;
 ALTER TABLE tool_tasks ALTER COLUMN approval_required SET NOT NULL;
 
--- Duplicate protection rollout is intentionally audit-first.
--- Before creating idx_tool_tasks_active_unique in production, run:
---   initdb/duplicate_audit.sql
--- If audit returns rows, run/review:
---   initdb/dedupe.sql
--- Then create the unique index manually or through a later deployment migration.
--- Keeping this migration column-only makes it idempotent and avoids failing
--- existing deployments that already contain duplicate active ToolTasks.
+ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS approval_reason TEXT;
+ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS reject_reason TEXT;
+ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;
+ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS approved_by VARCHAR(255);

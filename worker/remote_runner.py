@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 
 from app.config import settings
+from app.tool_task_constants import COMPLETED, FAILED
 from worker.parsers.tool_result_parser import parse_tool_output
 from worker.tool_runner import TaskContext, ToolRunOutcome
 
@@ -68,6 +69,6 @@ async def run_remote_tool(ctx: TaskContext) -> ToolRunOutcome:
         raw_output=raw_output or str(data),
         parsed_result=parsed_result,
         success=success,
-        status="completed" if success else "failed",
+        status=COMPLETED if success else FAILED,
         error_message=data.get("error") or data.get("message"),
     )

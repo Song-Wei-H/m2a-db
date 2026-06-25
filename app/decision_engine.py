@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.tool_catalog import DEPTH_VALIDATION_TOOLS, SAFE_DISCOVERY_TOOLS
+from app.tool_task_constants import NOT_REQUIRED, PENDING, PENDING_APPROVAL
 
 
 def _determine_approval(
@@ -20,7 +21,7 @@ def _determine_approval(
 ) -> tuple[bool, str, str | None]:
 
     if tool_name in SAFE_DISCOVERY_TOOLS:
-        return False, "not_required", None
+        return False, NOT_REQUIRED, None
 
     if tool_name in DEPTH_VALIDATION_TOOLS:
         high_risk = risk_score >= 6.0
@@ -29,16 +30,16 @@ def _determine_approval(
         if high_risk or high_confidence:
             return (
                 True,
-                "pending_approval",
+                PENDING_APPROVAL,
                 "High-risk validation requires human approval",
             )
 
-        return False, "not_required", None
+        return False, NOT_REQUIRED, None
 
     # Unknown tools require governance review
     return (
         True,
-        "pending_approval",
+        PENDING_APPROVAL,
         f"Unknown or uncategorized tool requires human approval: {tool_name}",
     )
 
@@ -276,7 +277,7 @@ async def run_decision_for_target(
 
         if next_action in ("continue", "verify") and next_tool != "none":
             approval_required = False
-            approval_status = "not_required"
+            approval_status = NOT_REQUIRED
             approval_reason = None
             try:
                 template_tool = resolve_template_tool(next_tool)
@@ -304,7 +305,7 @@ async def run_decision_for_target(
                     open_port_id=focus.id if focus else None,
                     decision_score_id=decision_row.id,
                     tool_name=template_tool,
-                    status="pending",
+                    status=PENDING,
                     priority=_task_priority(risk_score),
                     approval_required=approval_required,
                     approval_status=approval_status,

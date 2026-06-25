@@ -1,11 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from datetime import datetime
+from datetime import UTC, datetime
 from pydantic import BaseModel
 
 from app.database import get_db
 from app.models import ToolTask
+from app.tool_task_constants import APPROVAL_REJECTED, APPROVED, PENDING, PENDING_APPROVAL
+from app.tool_task_state import validate_approval_transition
 
 router = APIRouter(tags=["approvals"])
 
@@ -22,9 +24,9 @@ async def get_pending_approvals(
     """Return list of tool_task IDs pending approval."""
     result = await db.execute(
         select(ToolTask.id).where(
-            ToolTask.status == "pending",
+            ToolTask.status == PENDING,
             ToolTask.approval_required == True,
-            ToolTask.approval_status == "pending_approval",
+            ToolTask.approval_status == PENDING_APPROVAL,
         )
     )
 
@@ -48,20 +50,21 @@ async def approve_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    if task.approval_status != "pending_approval":
+    if task.approval_status != PENDING_APPROVAL:
         raise HTTPException(
             status_code=400,
             detail="Task not pending approval",
         )
 
-    task.approval_status = "approved"
-    task.approved_at = datetime.utcnow()
+    validate_approval_transition(task.approval_status, APPROVED)
+    task.approval_status = APPROVED
+    task.approved_at = datetime.now(UTC)
     task.approved_by = body.approved_by if body else "human"
 
     await db.commit()
 
     return {
-        "status": "approved",
+        "status": APPROVED,
         "task_id": task_id,
     }
 
@@ -82,14 +85,15 @@ async def reject_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    if task.approval_status != "pending_approval":
+    if task.approval_status != PENDING_APPROVAL:
         raise HTTPException(
             status_code=400,
             detail="Task not pending approval",
         )
 
-    task.approval_status = "rejected"
-    task.approved_at = datetime.utcnow()
+    validate_approval_transition(task.approval_status, APPROVAL_REJECTED)
+    task.approval_status = APPROVAL_REJECTED
+    task.approved_at = datetime.now(UTC)
     task.approved_by = body.approved_by if body else "human"
     task.reject_reason = (
         body.reason
@@ -100,6 +104,6 @@ async def reject_task(
     await db.commit()
 
     return {
-        "status": "rejected",
+        "status": APPROVAL_REJECTED,
         "task_id": task_id,
     }

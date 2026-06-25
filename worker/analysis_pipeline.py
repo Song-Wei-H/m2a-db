@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.database import async_session
 from app.models import AutoLoopDecision, DecisionScore, EvidenceConfidence, NormalizedResult, OpenPort, Target, ToolTask
+from app.tool_task_constants import ACTIVE_TASK_STATUSES, NOT_REQUIRED, PENDING
 from app.tool_task_writer import create_tool_task_if_not_exists
 from worker.confidence_scoring import calculate_confidence
 from worker.cve_enrichment import summarize_cve_risk
@@ -85,7 +86,7 @@ async def _existing_tool_task(
     query = select(ToolTask).where(
         ToolTask.target_id == target_id,
         ToolTask.tool_name == normalized_tool_name,
-        ToolTask.status.in_(["pending", "running", "completed"]),
+        ToolTask.status.in_(ACTIVE_TASK_STATUSES),
     )
     
     # Handle NULL values properly for open_port_id
@@ -310,9 +311,9 @@ async def _generate_tasks_from_nmap_open_ports(target_id: int) -> list[dict[str,
                 target_id=target_id,
                 open_port_id=port.id,
                 tool_name=next_tool,
-                status="pending",
+                status=PENDING,
                 approval_required=False,
-                approval_status="not_required",
+                approval_status=NOT_REQUIRED,
                 priority=50,
                 decision_score_id=decision.id,
             )

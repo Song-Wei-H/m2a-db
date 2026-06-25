@@ -9,6 +9,17 @@ from sqlalchemy import select, update
 
 from app.database import async_session
 from app.models import AutoLoopDecision, DecisionScore, OpenPort, Target, ToolTask
+from app.tool_task_constants import (
+    ACTIVE_TASK_STATUSES as DUPLICATE_PREVENTION_STATUSES,
+    APPROVED,
+    COMPLETED,
+    FAILED,
+    NOT_REQUIRED,
+    PENDING,
+    PENDING_APPROVAL,
+    REJECTED,
+    RUNNING,
+)
 from worker.task_generator import generate_tool_task
 from worker.tool_name_normalizer import normalize_tool_name
 
@@ -36,8 +47,8 @@ STOP_REASON_MESSAGES = {
     STOP_REASONS["approval_required_not_approved"]: "Approval required before execution",
 }
 
-ACTIVE_TASK_STATUSES = {"pending", "running"}
-EXECUTED_OR_SKIPPED_TASK_STATUSES = {"completed", "failed", "rejected"}
+ACTIVE_TASK_STATUSES = {PENDING, RUNNING}
+EXECUTED_OR_SKIPPED_TASK_STATUSES = {COMPLETED, FAILED, REJECTED}
 HTTP_SERVICES = {"http", "https", "ssl/http", "http-alt", "www"}
 
 
@@ -48,10 +59,10 @@ def _is_http_service(service: str | None, port: int | None = None) -> bool:
 def _approval_status_for_tool(tool_name: str | None, requires_approval: bool) -> tuple[bool, str]:
     normalized = normalize_tool_name(tool_name)
     if not normalized:
-        return False, "not_required"
+        return False, NOT_REQUIRED
     if normalized in DEPTH_TOOLS or requires_approval:
-        return True, "pending_approval"
-    return False, "not_required"
+        return True, PENDING_APPROVAL
+    return False, NOT_REQUIRED
 
 
 async def _existing_tool_task(
@@ -64,7 +75,7 @@ async def _existing_tool_task(
     query = select(ToolTask).where(
         ToolTask.target_id == target_id,
         ToolTask.tool_name == tool_name,
-        ToolTask.status.in_(["pending", "running", "completed"]),
+        ToolTask.status.in_(DUPLICATE_PREVENTION_STATUSES),
     )
     if open_port_id is None:
         query = query.where(ToolTask.open_port_id.is_(None))
@@ -147,7 +158,7 @@ async def _http_followup_candidate(
             ToolTask.target_id == target.id,
             ToolTask.open_port_id == open_port_id,
             ToolTask.tool_name == "httpx_basic",
-            ToolTask.status == "completed",
+            ToolTask.status == COMPLETED,
         )
         .limit(1)
     )
@@ -201,7 +212,7 @@ async def check_stop_conditions(
     approval_status: str | None = None,
 ) -> tuple[bool, str | None]:
     """Return whether the auto loop should stop before creating another task."""
-    if target_status == "completed":
+    if target_status == COMPLETED:
         return True, STOP_REASONS["target_completed"]
 
     if current_round >= max_round:
@@ -216,7 +227,7 @@ async def check_stop_conditions(
     if existing_tool_task is not None:
         return True, STOP_REASONS["duplicate_tool"]
 
-    if requires_approval and approval_status not in {"approved", "not_required"}:
+    if requires_approval and approval_status not in {APPROVED, NOT_REQUIRED}:
         return True, STOP_REASONS["approval_required_not_approved"]
 
     return False, None
@@ -295,7 +306,7 @@ async def _create_final_audit_decision_if_needed(session, target_id: int) -> boo
     task_query = select(ToolTask.id).where(
         ToolTask.target_id == target_id,
         ToolTask.tool_name == normalized_tool,
-        ToolTask.status.in_(["completed", "failed"]),
+        ToolTask.status.in_([COMPLETED, FAILED]),
     )
     if latest.open_port_id is None:
         task_query = task_query.where(ToolTask.open_port_id.is_(None))
@@ -373,7 +384,7 @@ async def finalize_target_if_idle(
     await session.execute(
         update(Target)
         .where(Target.id == target_id)
-        .values(status="completed")
+        .values(status=COMPLETED)
     )
     if stop_reason:
         logger.info("target_id=%s completed stop_reason=%s", target_id, stop_reason)
@@ -499,7 +510,7 @@ async def get_next_tool_task(target_id: int, open_port_id: int | None, decision_
         )
         if task_result.get("action") == "tool_task_created" and requires_approval:
             task_result["approval_required"] = True
-            task_result["approval_status"] = "pending_approval"
+            task_result["approval_status"] = PENDING_APPROVAL
         return task_result
 
     normalized_decision = {
@@ -515,7 +526,7 @@ async def get_next_tool_task(target_id: int, open_port_id: int | None, decision_
     )
     if task_result.get("action") == "tool_task_created" and requires_approval:
         task_result["approval_required"] = True
-        task_result["approval_status"] = "pending_approval"
+        task_result["approval_status"] = PENDING_APPROVAL
     return task_result
 
 

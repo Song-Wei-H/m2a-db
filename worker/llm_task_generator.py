@@ -6,6 +6,7 @@ from sqlalchemy import select, update
 
 from app.database import async_session
 from app.models import DecisionScore, LlmRecommendation, ToolTask
+from app.tool_task_constants import ACTIVE_TASK_STATUSES, PENDING, PENDING_APPROVAL
 from app.tool_task_writer import create_tool_task_if_not_exists
 
 
@@ -46,7 +47,7 @@ async def generate_task_from_llm_recommendation(
                     ToolTask.target_id == recommendation.target_id,
                     ToolTask.open_port_id == decision.open_port_id,
                     ToolTask.tool_name == recommendation.recommended_tool,
-                    ToolTask.status.in_(["pending", "running", "completed"]),
+                    ToolTask.status.in_(ACTIVE_TASK_STATUSES),
                 )
             )
         ).scalar_one_or_none()
@@ -60,10 +61,10 @@ async def generate_task_from_llm_recommendation(
             open_port_id=decision.open_port_id,
             decision_score_id=decision.id,
             tool_name=recommendation.recommended_tool,
-            status="pending",
+            status=PENDING,
             priority=80,
             approval_required=True,
-            approval_status="pending_approval",
+            approval_status=PENDING_APPROVAL,
             approval_reason=(
                 f"LLM recommended {recommendation.recommended_action} "
                 f"with {recommendation.recommended_tool}; "

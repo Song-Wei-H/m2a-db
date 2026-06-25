@@ -15,6 +15,7 @@ from app.schemas import (
     TargetSummaryResponse,
     ToolResultResponse,
 )
+from app.tool_task_constants import COMPLETED, FAILED, NOT_REQUIRED, PENDING, RUNNING
 from app.tool_task_writer import create_tool_task_if_not_exists
 from worker.report_generator import generate_target_report
 
@@ -78,16 +79,16 @@ async def get_target_run_status(target_id: int, db: AsyncSession = Depends(get_d
         raise HTTPException(status_code=404, detail="Target not found")
 
     pending_task_count = await db.scalar(
-        select(func.count(ToolTask.id)).where(ToolTask.target_id == target_id, ToolTask.status == "pending")
+        select(func.count(ToolTask.id)).where(ToolTask.target_id == target_id, ToolTask.status == PENDING)
     )
     running_task_count = await db.scalar(
-        select(func.count(ToolTask.id)).where(ToolTask.target_id == target_id, ToolTask.status == "running")
+        select(func.count(ToolTask.id)).where(ToolTask.target_id == target_id, ToolTask.status == RUNNING)
     )
     completed_task_count = await db.scalar(
-        select(func.count(ToolTask.id)).where(ToolTask.target_id == target_id, ToolTask.status == "completed")
+        select(func.count(ToolTask.id)).where(ToolTask.target_id == target_id, ToolTask.status == COMPLETED)
     )
     failed_task_count = await db.scalar(
-        select(func.count(ToolTask.id)).where(ToolTask.target_id == target_id, ToolTask.status == "failed")
+        select(func.count(ToolTask.id)).where(ToolTask.target_id == target_id, ToolTask.status == FAILED)
     )
     latest_decision = (
         await db.execute(
@@ -114,7 +115,7 @@ async def get_target_run_status(target_id: int, db: AsyncSession = Depends(get_d
             "created_at": latest_decision.created_at,
         }
 
-    terminal_status = target.status in {"completed", "failed", "stopped"}
+    terminal_status = target.status in {COMPLETED, FAILED, "stopped"}
     report_ready = terminal_status or latest_next_action == "stop"
 
     return TargetRunStatusResponse(
@@ -138,9 +139,9 @@ async def get_target_run_status(target_id: int, db: AsyncSession = Depends(get_d
 async def get_dashboard_overview(db: AsyncSession = Depends(get_db)) -> DashboardOverviewResponse:
     """Return aggregate dashboard counters without loading row payloads."""
     targets_total = await db.scalar(select(func.count(Target.id)))
-    targets_completed = await db.scalar(select(func.count(Target.id)).where(Target.status == "completed"))
-    targets_running = await db.scalar(select(func.count(Target.id)).where(Target.status == "running"))
-    targets_failed = await db.scalar(select(func.count(Target.id)).where(Target.status == "failed"))
+    targets_completed = await db.scalar(select(func.count(Target.id)).where(Target.status == COMPLETED))
+    targets_running = await db.scalar(select(func.count(Target.id)).where(Target.status == RUNNING))
+    targets_failed = await db.scalar(select(func.count(Target.id)).where(Target.status == FAILED))
     tool_results_total = await db.scalar(select(func.count(ToolResult.id)))
     decisions_total = await db.scalar(select(func.count(DecisionScore.id)))
     learning_feedback_total = await db.scalar(select(func.count(LearningFeedback.id)))
@@ -183,12 +184,12 @@ async def create_target(
         target=body.target,
         target_type=body.target_type,
         scope=body.scope,
-        status="pending",
+        status=PENDING,
     )
     scan_run = ScanRun(
         round=1,
         scan_type="nmap",
-        status="pending",
+        status=PENDING,
     )
 
     # targets + scan_runs must commit together; otherwise dispatcher has nothing to pick up.
@@ -203,10 +204,10 @@ async def create_target(
             target_id=target.id,
             open_port_id=None,
             tool_name="nmap_service",
-            status="pending",
+            status=PENDING,
             priority=50,
             approval_required=False,
-            approval_status="not_required",
+            approval_status=NOT_REQUIRED,
         )
 
     if scan_run.id is None or target.id is None:

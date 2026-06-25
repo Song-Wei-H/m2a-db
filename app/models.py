@@ -198,7 +198,7 @@ class ToolTask(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    status: Mapped[str] = mapped_column(String(50), server_default="pending")
+    status: Mapped[str] = mapped_column(String(50), nullable=False, server_default="pending")
     priority: Mapped[int] = mapped_column(Integer, default=5)
     reject_reason: Mapped[str | None] = mapped_column(Text)
 
@@ -216,10 +216,10 @@ class ToolTask(Base):
         DateTime(timezone=False),
         server_default=func.now(),
     )
-    target_id: Mapped[int] = mapped_column(Integer)
-    open_port_id: Mapped[int] = mapped_column(Integer)
-    tool_run: Mapped[str] = mapped_column(String(100))
-    decision_score_id: Mapped[int] = mapped_column(Integer)
+    target_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    open_port_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tool_run: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    decision_score_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 class AutoLoopDecision(Base):
     __tablename__ = "auto_loop_decisions"

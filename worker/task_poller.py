@@ -13,6 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import async_session
 from app.models import OpenPort, Target, ToolResult, ToolTask, ToolRegistry, CommandTemplate
+from app.tool_task_constants import (
+    EXECUTABLE_APPROVAL_STATUSES,
+    FAILED,
+    PENDING,
+    REJECTED,
+    RUNNING,
+)
+from app.tool_task_state import tool_task_status_values
 from worker.parsers.nmap_parser import parse_nmap_output
 from worker.tool_runner import TaskContext, run_tool
 from worker.safety import validate_task_execution
@@ -38,8 +46,8 @@ async def fetch_pending_tasks(db: AsyncSession, limit: int = 10) -> list[ToolTas
     stmt = (
         select(ToolTask)
         .where(
-            ToolTask.status == "pending",
-            ToolTask.approval_status.in_(["not_required", "approved"]),
+            ToolTask.status == PENDING,
+            ToolTask.approval_status.in_(EXECUTABLE_APPROVAL_STATUSES),
         )
         .order_by(ToolTask.priority.desc(), ToolTask.id)
         .limit(limit)
@@ -54,10 +62,10 @@ async def _claim_task(db: AsyncSession, task_id: int) -> bool:
         update(ToolTask)
         .where(
             ToolTask.id == task_id,
-            ToolTask.status == "pending",
-            ToolTask.approval_status.in_(["not_required", "approved"]),
+            ToolTask.status == PENDING,
+            ToolTask.approval_status.in_(EXECUTABLE_APPROVAL_STATUSES),
         )
-        .values(status="running")
+        .values(**tool_task_status_values(PENDING, RUNNING))
         .returning(ToolTask.id)
     )
     return result.scalar_one_or_none() is not None
@@ -158,7 +166,7 @@ async def _persist_result(db: AsyncSession, ctx: TaskContext, outcome) -> int:
     await db.execute(
         update(ToolTask)
         .where(ToolTask.id == ctx.task_id)
-        .values(status=outcome.status)
+        .values(**tool_task_status_values(RUNNING, outcome.status))
     )
 
     return row.id
@@ -186,7 +194,7 @@ async def _reject_task(task_id: int, reason: str) -> None:
         await db.execute(
             update(ToolTask)
             .where(ToolTask.id == task_id)
-            .values(status="rejected", reject_reason=reason[:2000])
+            .values(**tool_task_status_values(PENDING, REJECTED, reject_reason=reason[:2000]))
         )
     logger.warning("tool_task_id=%s rejected: %s", task_id, reason)
 
@@ -203,7 +211,7 @@ async def _fail_task(
         await db.execute(
             update(ToolTask)
             .where(ToolTask.id == snapshot.id)
-            .values(status="failed", reject_reason=reason[:2000])
+            .values(**tool_task_status_values(RUNNING, FAILED, reject_reason=reason[:2000]))
         )
 
         row = ToolResult(
@@ -262,8 +270,8 @@ async def execute_task(task_id: int) -> None:
         )
         await db.execute(
             update(Target)
-            .where(Target.id == task.target_id, Target.status == "pending")
-            .values(status="running")
+            .where(Target.id == task.target_id, Target.status == PENDING)
+            .values(status=RUNNING)
         )
 
         reg_stmt = (
@@ -277,8 +285,11 @@ async def execute_task(task_id: int) -> None:
                 update(ToolTask)
                 .where(ToolTask.id == task.id)
                 .values(
-                    status="rejected",
-                    reject_reason="Tool is not enabled in registry",
+                    **tool_task_status_values(
+                        RUNNING,
+                        REJECTED,
+                        reject_reason="Tool is not enabled in registry",
+                    )
                 )
             )
             logger.warning(
@@ -293,7 +304,7 @@ async def execute_task(task_id: int) -> None:
             await db.execute(
                 update(ToolTask)
                 .where(ToolTask.id == task.id)
-                .values(status="rejected", reject_reason=str(exc)[:2000])
+                .values(**tool_task_status_values(RUNNING, REJECTED, reject_reason=str(exc)[:2000]))
             )
             logger.warning("tool_task_id=%s rejected: %s", task.id, exc)
             return
@@ -313,8 +324,11 @@ async def execute_task(task_id: int) -> None:
                 update(ToolTask)
                 .where(ToolTask.id == task.id)
                 .values(
-                    status="rejected",
-                    reject_reason="CommandTemplate not enabled",
+                    **tool_task_status_values(
+                        RUNNING,
+                        REJECTED,
+                        reject_reason="CommandTemplate not enabled",
+                    )
                 )
             )
             logger.warning(

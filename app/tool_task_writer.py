@@ -8,8 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ToolTask
-
-ACTIVE_TASK_STATUSES = ("pending", "running", "completed")
+from app.tool_task_constants import ACTIVE_TASK_STATUSES
 
 
 async def find_active_tool_task(

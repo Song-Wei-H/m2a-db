@@ -40,8 +40,9 @@ CREATE TABLE IF NOT EXISTS tool_tasks (
   open_port_id INT REFERENCES open_ports(id),
   decision_score_id INT REFERENCES decision_scores(id),
   tool_name VARCHAR(100) NOT NULL,
-  status VARCHAR(50) DEFAULT 'pending',
+  status VARCHAR(50) NOT NULL DEFAULT 'pending',
   priority INT DEFAULT 5,
+  tool_run VARCHAR(100),
   reject_reason TEXT,
   approval_status VARCHAR(50) NOT NULL DEFAULT 'not_required',
   approval_required BOOLEAN NOT NULL DEFAULT FALSE,
@@ -53,10 +54,20 @@ CREATE TABLE IF NOT EXISTS tool_tasks (
 
 ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS decision_score_id INT REFERENCES decision_scores(id);
 ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'pending';
+UPDATE tool_tasks SET status = 'pending' WHERE status IS NULL;
+ALTER TABLE tool_tasks ALTER COLUMN status SET DEFAULT 'pending';
+ALTER TABLE tool_tasks ALTER COLUMN status SET NOT NULL;
 ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS priority INT DEFAULT 5;
+ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS tool_run VARCHAR(100);
 ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS reject_reason TEXT;
 ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS approval_status VARCHAR(50) NOT NULL DEFAULT 'not_required';
+UPDATE tool_tasks SET approval_status = 'not_required' WHERE approval_status IS NULL;
+ALTER TABLE tool_tasks ALTER COLUMN approval_status SET DEFAULT 'not_required';
+ALTER TABLE tool_tasks ALTER COLUMN approval_status SET NOT NULL;
 ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS approval_required BOOLEAN NOT NULL DEFAULT FALSE;
+UPDATE tool_tasks SET approval_required = FALSE WHERE approval_required IS NULL;
+ALTER TABLE tool_tasks ALTER COLUMN approval_required SET DEFAULT FALSE;
+ALTER TABLE tool_tasks ALTER COLUMN approval_required SET NOT NULL;
 ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS approval_reason TEXT;
 ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;
 ALTER TABLE tool_tasks ADD COLUMN IF NOT EXISTS approved_by VARCHAR(255);

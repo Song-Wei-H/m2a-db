@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Target, ToolTask, ToolRegistry, ToolRequest
+from app.models import Target, ToolRegistry, ToolRequest
 from app.security.llm_schema import LlmToolProposal
 from app.security.tool_policy import (
     parse_llm_payload,
@@ -21,16 +21,17 @@ from app.security.tool_policy import (
     validate_profile,
 )
 from app.tool_catalog import DEPTH_VALIDATION_TOOLS, SAFE_DISCOVERY_TOOLS
+from app.tool_task_constants import NOT_REQUIRED, PENDING, PENDING_APPROVAL, REJECTED
 from app.tool_task_writer import create_tool_task_if_not_exists
 
 def _determine_approval_from_risk_level(tool_name: str, risk_level: str) -> tuple[bool, str, str | None]:
     if tool_name in SAFE_DISCOVERY_TOOLS:
-        return False, "not_required", None
+        return False, NOT_REQUIRED, None
     if tool_name in DEPTH_VALIDATION_TOOLS:
         if risk_level in ("critical", "high"):
-            return True, "pending_approval", "High-risk validation requires human approval"
-        return False, "not_required", None
-    return True, "pending_approval", "Unknown or uncategorized tool requires human approval"
+            return True, PENDING_APPROVAL, "High-risk validation requires human approval"
+        return False, NOT_REQUIRED, None
+    return True, PENDING_APPROVAL, "Unknown or uncategorized tool requires human approval"
 
 logger = logging.getLogger(__name__)
 
@@ -57,25 +58,24 @@ async def _reject_task(
         return DispatchResult(
             accepted=False,
             tool_task_id=None,
-            status="rejected",
+            status=REJECTED,
             message=reason,
         )
 
-    row = ToolTask(
+    row, _ = await create_tool_task_if_not_exists(
+        db,
         target_id=target_id,
         open_port_id=open_port_id,
         tool_name=tool_name[:100],
-        status="rejected",
+        status=REJECTED,
         reject_reason=reason[:2000],
         priority=9,
     )
-    db.add(row)
-    await db.flush()
-    logger.warning("tool_task rejected id=%s reason=%s", row.id, reason)
+    logger.warning("tool_task rejected id=%s reason=%s", row.id if row else None, reason)
     return DispatchResult(
         accepted=False,
-        tool_task_id=row.id,
-        status="rejected",
+        tool_task_id=row.id if row else None,
+        status=REJECTED,
         message=reason,
     )
 
@@ -229,7 +229,7 @@ async def dispatch_llm_tool_proposal(
         target_id=target_id,
         open_port_id=open_port_id,
         tool_name=template_tool,
-        status="pending",
+        status=PENDING,
         priority=_priority_from_risk(proposal.risk_level),
         approval_required=approval_required,
         approval_status=approval_status,
@@ -254,7 +254,7 @@ async def dispatch_llm_tool_proposal(
     return DispatchResult(
         accepted=True,
         tool_task_id=task.id if task else None,
-        status="pending",
+        status=PENDING,
         message=proposal.reason,
         proposal=proposal,
     )
