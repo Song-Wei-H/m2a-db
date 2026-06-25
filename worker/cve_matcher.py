@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import PortCveMatch
+from app.models import CveEnrichment, PortCveMatch, TargetCveMatch
 
 
 @dataclass(frozen=True)
@@ -16,19 +16,6 @@ class CpeEvidence:
     version: str | None
     cpe: str | None
     source: str
-
-
-DETERMINISTIC_CVE_DATA: dict[tuple[str, str], list[dict[str, Any]]] = {
-    ("nginx", "nginx"): [
-        {"cve_id": "CVE-2024-NGINX-0001", "cvss": 8.8, "epss": 0.72, "kev": False},
-    ],
-    ("citeum", "opencti"): [
-        {"cve_id": "CVE-2024-OPENCTI-0001", "cvss": 8.8, "epss": 0.31, "kev": False},
-    ],
-    ("matrix", "element"): [
-        {"cve_id": "CVE-2024-ELEMENT-0001", "cvss": 6.5, "epss": 0.08, "kev": False},
-    ],
-}
 
 
 def _clean(value: Any) -> str | None:
@@ -124,8 +111,27 @@ def _match_type(evidence: CpeEvidence) -> tuple[str, float]:
     return "technology_only", 0.3
 
 
-def _candidate_rows(evidence: CpeEvidence) -> list[dict[str, Any]]:
-    return DETERMINISTIC_CVE_DATA.get((evidence.vendor, evidence.product), [])
+def _candidate_version(value: Any) -> str | None:
+    cleaned = _clean(value)
+    if cleaned in (None, "*"):
+        return None
+    return cleaned
+
+
+async def _candidate_rows(session: AsyncSession, evidence: CpeEvidence) -> list[CveEnrichment]:
+    query = select(CveEnrichment).where(
+        func.lower(CveEnrichment.affected_product) == evidence.product,
+    )
+    if evidence.version:
+        query = query.where(func.lower(CveEnrichment.affected_version) == evidence.version)
+    else:
+        query = query.where(
+            (CveEnrichment.affected_version.is_(None))
+            | (CveEnrichment.affected_version == "")
+            | (CveEnrichment.affected_version == "*")
+        )
+    result = await session.execute(query.order_by(CveEnrichment.cve))
+    return list(result.scalars().all())
 
 
 async def _already_exists(
@@ -149,6 +155,25 @@ async def _already_exists(
     return result.scalar_one_or_none() is not None
 
 
+async def _target_match_exists(
+    session: AsyncSession,
+    *,
+    target_id: int,
+    cve_id: str,
+    match_type: str,
+) -> bool:
+    result = await session.execute(
+        select(TargetCveMatch)
+        .where(
+            TargetCveMatch.target_id == target_id,
+            TargetCveMatch.cve_id == cve_id,
+            TargetCveMatch.match_type == match_type,
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
 async def match_cves_for_target(
     session: AsyncSession,
     *,
@@ -157,9 +182,6 @@ async def match_cves_for_target(
     parsed_output: dict[str, Any] | None = None,
     cpe: str | None = None,
 ) -> list[dict[str, Any]]:
-    if open_port_id is None:
-        return []
-
     evidence_items = extract_cpe_evidence(parsed_output)
     parsed_cpe = parse_cpe(cpe)
     if parsed_cpe:
@@ -168,45 +190,69 @@ async def match_cves_for_target(
     matches: list[dict[str, Any]] = []
     for evidence in evidence_items:
         match_type, confidence = _match_type(evidence)
-        candidates = _candidate_rows(evidence)
 
         if match_type == "technology_only":
             continue
 
+        candidates = await _candidate_rows(session, evidence)
+
         for candidate in candidates:
+            cve_id = candidate.cve
+            cvss_score = candidate.cvss_score if candidate.cvss_score is not None else candidate.cvss
+            affected_version = _candidate_version(candidate.affected_version)
+            match_reason = (
+                "Exact product and version match from local cve_enrichment."
+                if match_type == "exact_cpe_version"
+                else "Product-only candidate from local cve_enrichment; version unknown, confidence capped."
+            )
             row_data = {
                 "target_id": target_id,
-                "open_port_id": open_port_id,
-                "cve_id": candidate["cve_id"],
+                "cve_id": cve_id,
+                "cve": cve_id,
                 "product": evidence.product,
                 "version": evidence.version,
-                "cvss": candidate["cvss"],
-                "epss": candidate["epss"],
-                "kev": candidate["kev"],
+                "cvss": cvss_score,
+                "cvss_score": cvss_score,
+                "severity": candidate.severity,
+                "epss": candidate.epss,
+                "kev": bool(candidate.kev),
                 "match_type": match_type,
                 "match_confidence": confidence,
-                "source": evidence.cpe or "deterministic_mock_cve_feed",
+                "match_reason": match_reason,
+                "source": candidate.source or "local_cve_enrichment",
+                "affected_vendor": candidate.affected_vendor,
+                "affected_product": candidate.affected_product,
+                "affected_version": affected_version,
             }
             inserted = False
-            if not await _already_exists(
-                session,
-                target_id=target_id,
-                open_port_id=open_port_id,
-                cve_id=candidate["cve_id"],
-                match_type=match_type,
-            ):
-                session.add(PortCveMatch(**row_data))
-                inserted = True
+            if open_port_id is not None:
+                port_row_data = {**row_data, "open_port_id": open_port_id}
+                if not await _already_exists(
+                    session,
+                    target_id=target_id,
+                    open_port_id=open_port_id,
+                    cve_id=cve_id,
+                    match_type=match_type,
+                ):
+                    session.add(PortCveMatch(**port_row_data))
+                    inserted = True
+                output_data = port_row_data
+            else:
+                if not await _target_match_exists(
+                    session,
+                    target_id=target_id,
+                    cve_id=cve_id,
+                    match_type=match_type,
+                ):
+                    session.add(TargetCveMatch(**row_data))
+                    inserted = True
+                output_data = row_data
 
             matches.append(
                 {
-                    **row_data,
+                    **output_data,
                     "inserted": inserted,
-                    "reason": (
-                        "Exact CPE version match."
-                        if match_type == "exact_cpe_version"
-                        else "CPE product-only candidate; version unknown, confidence capped."
-                    ),
+                    "reason": match_reason,
                 }
             )
 

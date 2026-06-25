@@ -3,7 +3,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import DecisionScore, LearningFeedback, PortCveMatch, ScanRun, Target, ToolResult
+from app.models import DecisionScore, LearningFeedback, PortCveMatch, ScanRun, Target, ToolResult, ToolTask
 from app.schemas import (
     DashboardOverviewResponse,
     DecisionResponse,
@@ -11,6 +11,7 @@ from app.schemas import (
     TargetCreate,
     TargetCreateResponse,
     TargetReportResponse,
+    TargetRunStatusResponse,
     TargetSummaryResponse,
     ToolResultResponse,
 )
@@ -65,6 +66,70 @@ async def get_target_learning_feedback(target_id: int):
         report.get("learning_feedback", []),
         key=lambda feedback: feedback.get("created_at") or "",
         reverse=True,
+    )
+
+
+@router.get("/targets/{target_id}/run-status", response_model=TargetRunStatusResponse)
+async def get_target_run_status(target_id: int, db: AsyncSession = Depends(get_db)) -> TargetRunStatusResponse:
+    """Return orchestration status and task counters for a target."""
+    target = await db.get(Target, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Target not found")
+
+    pending_task_count = await db.scalar(
+        select(func.count(ToolTask.id)).where(ToolTask.target_id == target_id, ToolTask.status == "pending")
+    )
+    running_task_count = await db.scalar(
+        select(func.count(ToolTask.id)).where(ToolTask.target_id == target_id, ToolTask.status == "running")
+    )
+    completed_task_count = await db.scalar(
+        select(func.count(ToolTask.id)).where(ToolTask.target_id == target_id, ToolTask.status == "completed")
+    )
+    failed_task_count = await db.scalar(
+        select(func.count(ToolTask.id)).where(ToolTask.target_id == target_id, ToolTask.status == "failed")
+    )
+    latest_decision = (
+        await db.execute(
+            select(DecisionScore)
+            .where(DecisionScore.target_id == target_id)
+            .order_by(DecisionScore.created_at.desc(), DecisionScore.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    latest_decision_data = None
+    latest_next_action = None
+    latest_next_tool = None
+    if latest_decision is not None:
+        latest_next_action = latest_decision.next_action
+        latest_next_tool = latest_decision.next_tool
+        latest_decision_data = {
+            "decision_score_id": latest_decision.id,
+            "risk_score": latest_decision.risk_score,
+            "severity": latest_decision.severity,
+            "next_action": latest_decision.next_action,
+            "next_tool": latest_decision.next_tool,
+            "reason": latest_decision.reason,
+            "created_at": latest_decision.created_at,
+        }
+
+    terminal_status = target.status in {"completed", "failed", "stopped"}
+    report_ready = terminal_status or latest_next_action == "stop"
+
+    return TargetRunStatusResponse(
+        target_id=target.id,
+        target=target.target,
+        status=target.status,
+        current_round=target.current_round,
+        max_rounds=target.max_round,
+        pending_task_count=pending_task_count or 0,
+        running_task_count=running_task_count or 0,
+        completed_task_count=completed_task_count or 0,
+        failed_task_count=failed_task_count or 0,
+        latest_decision=latest_decision_data,
+        latest_next_action=latest_next_action,
+        latest_next_tool=latest_next_tool,
+        report_ready=report_ready,
     )
 
 
@@ -132,6 +197,17 @@ async def create_target(
         scan_run.target_id = target.id
         db.add(scan_run)
         await db.flush()
+        db.add(
+            ToolTask(
+                target_id=target.id,
+                open_port_id=None,
+                tool_name="nmap_service",
+                status="pending",
+                priority=50,
+                approval_required=False,
+                approval_status="not_required",
+            )
+        )
 
     if scan_run.id is None or target.id is None:
         raise RuntimeError("POST /targets failed to create target and scan_run in one transaction")

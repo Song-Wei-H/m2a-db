@@ -14,6 +14,7 @@ from app.models import (
     NormalizedResult,
     OpenPort,
     PortCveMatch,
+    TargetCveMatch,
     Target,
     ToolResult,
     ToolTask,
@@ -299,24 +300,69 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             )
         ).scalars().all()
 
+        target_cve_matches = (
+            await session.execute(
+                select(TargetCveMatch)
+                .where(TargetCveMatch.target_id == target_id)
+                .order_by(TargetCveMatch.id.desc())
+            )
+        ).scalars().all()
+
         port_by_id = {port.id: port for port in ports}
         cves_by_port: dict[int, list[dict[str, Any]]] = {}
         matched_cves = []
         for match in cve_matches:
+            cve_value = getattr(match, "cve", None) or match.cve_id
+            cvss_score = getattr(match, "cvss_score", None)
+            if cvss_score is None:
+                cvss_score = match.cvss
+            affected_product = getattr(match, "affected_product", None) or match.product
+            affected_version = getattr(match, "affected_version", None) or match.version
             item = {
+                "cve": cve_value,
                 "cve_id": match.cve_id,
                 "open_port_id": match.open_port_id,
                 "product": match.product,
                 "version": match.version,
                 "cvss": match.cvss,
+                "cvss_score": cvss_score,
+                "severity": getattr(match, "severity", None),
                 "epss": match.epss,
                 "kev": match.kev,
+                "affected_product": affected_product,
+                "affected_version": affected_version,
                 "match_type": match.match_type,
                 "match_confidence": match.match_confidence,
+                "match_reason": getattr(match, "match_reason", None),
                 "source": match.source,
             }
             matched_cves.append(item)
             cves_by_port.setdefault(match.open_port_id, []).append(item)
+        for match in target_cve_matches:
+            cve_value = getattr(match, "cve", None) or match.cve_id
+            cvss_score = getattr(match, "cvss_score", None)
+            if cvss_score is None:
+                cvss_score = match.cvss
+            matched_cves.append(
+                {
+                    "cve": cve_value,
+                    "cve_id": match.cve_id,
+                    "open_port_id": None,
+                    "product": match.product,
+                    "version": match.version,
+                    "cvss": match.cvss,
+                    "cvss_score": cvss_score,
+                    "severity": getattr(match, "severity", None),
+                    "epss": match.epss,
+                    "kev": match.kev,
+                    "affected_product": getattr(match, "affected_product", None) or match.product,
+                    "affected_version": getattr(match, "affected_version", None) or match.version,
+                    "match_type": match.match_type,
+                    "match_confidence": match.match_confidence,
+                    "match_reason": getattr(match, "match_reason", None),
+                    "source": match.source,
+                }
+            )
         decisions_by_risk = sorted(
             decision_scores,
             key=lambda decision: (_risk_score(decision.risk_score), _severity_rank(decision.severity)),

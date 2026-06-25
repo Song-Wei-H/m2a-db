@@ -280,8 +280,17 @@ class CveEnrichment(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     cve: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     cvss: Mapped[float | None] = mapped_column(Float)
+    cvss_score: Mapped[float | None] = mapped_column(Float)
+    severity: Mapped[str | None] = mapped_column(String(50))
     epss: Mapped[float | None] = mapped_column(Float)
     kev: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    affected_vendor: Mapped[str | None] = mapped_column(String(255))
+    affected_product: Mapped[str | None] = mapped_column(String(255))
+    affected_version: Mapped[str | None] = mapped_column(String(255))
+    source: Mapped[str | None] = mapped_column(String(50))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False))
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False))
     mitre_tactic: Mapped[str | None] = mapped_column(String(100))
     mitre_technique: Mapped[str | None] = mapped_column(String(100))
     description: Mapped[str | None] = mapped_column(Text)
@@ -299,6 +308,7 @@ class PortCveMatch(Base):
         String(50),
         nullable=False,
     )
+    cve: Mapped[str | None] = mapped_column(String(50))
     product: Mapped[str | None] = mapped_column(
         String(255)
     )
@@ -306,6 +316,8 @@ class PortCveMatch(Base):
         String(255)
     )
     cvss: Mapped[float | None] = mapped_column(Float)
+    cvss_score: Mapped[float | None] = mapped_column(Float)
+    severity: Mapped[str | None] = mapped_column(String(50))
     epss: Mapped[float | None] = mapped_column(Float)
     kev: Mapped[bool] = mapped_column(
         Boolean,
@@ -320,6 +332,37 @@ class PortCveMatch(Base):
     source: Mapped[str | None] = mapped_column(
         Text
     )
+    match_reason: Mapped[str | None] = mapped_column(Text)
+    affected_vendor: Mapped[str | None] = mapped_column(String(255))
+    affected_product: Mapped[str | None] = mapped_column(String(255))
+    affected_version: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False),
+        server_default=func.now(),
+    )
+
+
+class TargetCveMatch(Base):
+    __tablename__ = "target_cve_matches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    cve_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    cve: Mapped[str | None] = mapped_column(String(50))
+    product: Mapped[str | None] = mapped_column(String(255))
+    version: Mapped[str | None] = mapped_column(String(255))
+    cvss: Mapped[float | None] = mapped_column(Float)
+    cvss_score: Mapped[float | None] = mapped_column(Float)
+    severity: Mapped[str | None] = mapped_column(String(50))
+    epss: Mapped[float | None] = mapped_column(Float)
+    kev: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    match_type: Mapped[str | None] = mapped_column(String(50))
+    match_confidence: Mapped[float | None] = mapped_column(Float)
+    match_reason: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str | None] = mapped_column(Text)
+    affected_vendor: Mapped[str | None] = mapped_column(String(255))
+    affected_product: Mapped[str | None] = mapped_column(String(255))
+    affected_version: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),
         server_default=func.now(),

@@ -16,6 +16,22 @@ class TargetCreateResponse(BaseModel):
     status: str
 
 
+class TargetRunStatusResponse(BaseModel):
+    target_id: int
+    target: str
+    status: str
+    current_round: int | None = None
+    max_rounds: int | None = None
+    pending_task_count: int = 0
+    running_task_count: int = 0
+    completed_task_count: int = 0
+    failed_task_count: int = 0
+    latest_decision: dict[str, Any] | None = None
+    latest_next_action: str | None = None
+    latest_next_tool: str | None = None
+    report_ready: bool = False
+
+
 class DecisionRunResponse(BaseModel):
     target_id: int
     next_action: str

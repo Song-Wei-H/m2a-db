@@ -305,12 +305,22 @@ def _calculate_risk_v3_primary(
     }
     cve_summary = parsed_output.get("cve_summary")
     if isinstance(cve_summary, dict):
+        cve_factor = {
+            "match_count": cve_summary.get("cve_count", 0),
+            "best_cve": cve_summary.get("best_cve"),
+            "cvss": cve_summary.get("max_cvss"),
+            "epss": cve_summary.get("max_epss"),
+            "kev": cve_summary.get("has_kev", False),
+            "match_type": cve_summary.get("best_match_type"),
+            "match_confidence": cve_summary.get("best_match_confidence"),
+        }
         components.update(
             {
-                "match_count": cve_summary.get("cve_count", 0),
-                "match_type": cve_summary.get("best_match_type"),
-                "match_confidence": cve_summary.get("best_match_confidence"),
-                "best_cve": cve_summary.get("best_cve"),
+                "cve_factor": cve_factor,
+                "match_count": cve_factor["match_count"],
+                "match_type": cve_factor["match_type"],
+                "match_confidence": cve_factor["match_confidence"],
+                "best_cve": cve_factor["best_cve"],
             }
         )
     reasoning: list[Any] = [

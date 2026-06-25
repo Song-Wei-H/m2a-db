@@ -260,6 +260,11 @@ async def execute_task(task_id: int) -> None:
             approval_required=task.approval_required,
             approval_status=task.approval_status,
         )
+        await db.execute(
+            update(Target)
+            .where(Target.id == task.target_id, Target.status == "pending")
+            .values(status="running")
+        )
 
         reg_stmt = (
             select(ToolRegistry)

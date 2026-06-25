@@ -49,6 +49,10 @@ def is_high_confidence_version_match(row: PortCveMatch) -> bool:
     )
 
 
+def row_cvss(row: PortCveMatch) -> float | None:
+    return row.cvss_score if getattr(row, "cvss_score", None) is not None else row.cvss
+
+
 def score_single_cve(
     *,
     cvss: float | None,
@@ -151,7 +155,7 @@ async def summarize_cve_risk(
 
     for row in rows:
         item_score = score_single_cve(
-            cvss=row.cvss,
+            cvss=row_cvss(row),
             epss=row.epss,
             kev=bool(row.kev),
             match_confidence=row.match_confidence,
@@ -165,8 +169,9 @@ async def summarize_cve_risk(
             best_match_confidence = row.match_confidence
             best_match_type = row.match_type
 
-        if is_high_confidence_version_match(row) and row.cvss is not None:
-            max_cvss = row.cvss if max_cvss is None else max(max_cvss, row.cvss)
+        current_cvss = row_cvss(row)
+        if is_high_confidence_version_match(row) and current_cvss is not None:
+            max_cvss = current_cvss if max_cvss is None else max(max_cvss, current_cvss)
 
         if is_high_confidence_version_match(row) and row.epss is not None:
             max_epss = row.epss if max_epss is None else max(max_epss, row.epss)

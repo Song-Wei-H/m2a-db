@@ -1,0 +1,78 @@
+{
+  "vulnerabilities": [
+    {
+      "cve": {
+        "id": "CVE-2024-NGINX-0001",
+        "published": "2024-01-02T00:00:00.000Z",
+        "lastModified": "2024-01-03T00:00:00.000Z",
+        "descriptions": [
+          {
+            "lang": "en",
+            "value": "Sample nginx version-specific vulnerability used for offline M2A tests."
+          }
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            {
+              "cvssData": {
+                "baseScore": 9.8,
+                "baseSeverity": "CRITICAL"
+              }
+            }
+          ]
+        },
+        "configurations": [
+          {
+            "nodes": [
+              {
+                "cpeMatch": [
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:nginx:nginx:1.25.5:*:*:*:*:*:*:*"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2024-OPENCTI-0001",
+        "published": "2024-02-02T00:00:00.000Z",
+        "lastModified": "2024-02-03T00:00:00.000Z",
+        "descriptions": [
+          {
+            "lang": "en",
+            "value": "Sample OpenCTI product-level candidate vulnerability with unknown version."
+          }
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            {
+              "cvssData": {
+                "baseScore": 6.5,
+                "baseSeverity": "MEDIUM"
+              }
+            }
+          ]
+        },
+        "configurations": [
+          {
+            "nodes": [
+              {
+                "cpeMatch": [
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:citeum:opencti:*:*:*:*:*:*:*:*"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

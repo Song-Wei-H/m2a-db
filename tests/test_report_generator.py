@@ -170,15 +170,21 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
         created_at=created_at,
     )
     cve_match = row(
+        cve="CVE-2024-NGINX-0001",
         cve_id="CVE-2024-NGINX-0001",
         open_port_id=101,
         product="nginx",
         version="1.25",
         cvss=8.8,
+        cvss_score=8.8,
+        severity="high",
         epss=0.72,
         kev=False,
+        affected_product="nginx",
+        affected_version="1.25",
         match_type="exact_cpe_version",
         match_confidence=1.0,
+        match_reason="Exact product and version match from local cve_enrichment.",
         source="cpe:2.3:a:nginx:nginx:1.25:*:*:*:*:*:*:*",
     )
     session = make_session(
@@ -193,6 +199,7 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
             FakeScalarResult([auto_loop_decision]),
             FakeScalarResult([learning_feedback]),
             FakeScalarResult([cve_match]),
+            FakeScalarResult([]),
         ],
     )
 
@@ -200,13 +207,16 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
         report = await generate_target_report(1)
 
     session.get.assert_awaited_once()
-    assert session.execute.await_count == 9
+    assert session.execute.await_count == 10
     assert report["target"] is report["target_summary"]
     assert report["target_summary"]["target_id"] == 1
     assert report["target_summary"]["open_port_count"] == 1
     assert report["target_summary"]["highest_risk_score"] == 8.5
     assert report["open_ports"][0]["port"] == 443
     assert report["open_ports"][0]["matched_cves"][0]["cve_id"] == "CVE-2024-NGINX-0001"
+    assert report["open_ports"][0]["matched_cves"][0]["cve"] == "CVE-2024-NGINX-0001"
+    assert report["open_ports"][0]["matched_cves"][0]["cvss_score"] == 8.8
+    assert report["open_ports"][0]["matched_cves"][0]["match_reason"].startswith("Exact product")
     assert report["tool_results"][0]["tool_name"] == "httpx"
     assert report["tool_tasks"][0]["tool_run"] == "run-1"
     assert report["decision_scores"][0]["risk_score"] == 8.5
@@ -252,6 +262,8 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
         }
     ]
     assert report["matched_cves"][0]["match_type"] == "exact_cpe_version"
+    assert report["matched_cves"][0]["affected_product"] == "nginx"
+    assert report["matched_cves"][0]["affected_version"] == "1.25"
     assert report["learning_feedback_summary"] == {
         "total_feedback": 1,
         "successful": 1,
@@ -347,6 +359,7 @@ async def test_completed_target_recommended_actions_use_latest_final_stop_only()
             FakeScalarResult([]),
             FakeScalarResult([]),
             FakeScalarResult([]),
+            FakeScalarResult([]),
         ],
     )
 
@@ -430,6 +443,7 @@ async def test_report_remediation_flags_follow_next_action():
             FakeScalarResult([]),
             FakeScalarResult([]),
             FakeScalarResult(decisions),
+            FakeScalarResult([]),
             FakeScalarResult([]),
             FakeScalarResult([]),
             FakeScalarResult([]),

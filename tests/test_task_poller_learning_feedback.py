@@ -142,6 +142,7 @@ async def test_execute_task_remote_timeout_marks_failed_and_writes_tool_result()
     initial_db.execute = AsyncMock(
         side_effect=[
             FakeScalarResult(86),
+            FakeScalarResult(None),
             FakeScalarResult(registry),
             FakeScalarResult(template),
         ]
@@ -180,6 +181,9 @@ async def test_execute_task_remote_timeout_marks_failed_and_writes_tool_result()
         AsyncMock(return_value=False),
     ):
         await execute_task(86)
+
+    running_update = initial_db.execute.await_args_list[1].args[0]
+    assert running_update.compile().params["status"] == "running"
 
     failed_update = fail_db.execute.await_args.args[0]
     assert failed_update.compile().params["status"] == "failed"

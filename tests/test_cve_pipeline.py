@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.models import PortCveMatch
+from app.models import CveEnrichment, PortCveMatch
 from worker.cve_enrichment import summarize_cve_risk
 from worker.risk_engine_v3 import calculate_risk
 from worker.task_poller import _persist_result
@@ -30,7 +30,27 @@ async def test_persist_httpx_result_invokes_cve_matching_after_tool_result_flush
     db = MagicMock()
     db.add = MagicMock()
     db.flush = AsyncMock()
-    db.execute = AsyncMock(return_value=FakeScalarResult())
+    db.execute = AsyncMock(
+        side_effect=[
+            FakeScalarResult(
+                rows=[
+                    CveEnrichment(
+                        cve="CVE-2024-OPENCTI-0001",
+                        affected_vendor="citeum",
+                        affected_product="opencti",
+                        affected_version=None,
+                        cvss_score=6.5,
+                        severity="medium",
+                        epss=None,
+                        kev=False,
+                        source="nvd",
+                    )
+                ]
+            ),
+            FakeScalarResult(one=None),
+            FakeScalarResult(one=None),
+        ]
+    )
     ctx = TaskContext(
         task_id=86,
         target_id=18,
@@ -126,6 +146,15 @@ def test_decision_score_reasoning_contains_cve_match_trace():
     )
 
     trace = result.reasoning[0]
+    assert trace["cve_factor"] == {
+        "match_count": 3,
+        "best_cve": "CVE-2024-NGINX-0001",
+        "cvss": 8.8,
+        "epss": 0.72,
+        "kev": False,
+        "match_type": "exact_cpe_version",
+        "match_confidence": 1.0,
+    }
     assert trace["match_count"] == 3
     assert trace["cvss"] == 8.8
     assert trace["epss"] == 0.72
@@ -160,3 +189,41 @@ def test_product_only_cve_does_not_directly_create_high_or_critical_engine_input
     assert result.reasoning[0]["match_type"] == "cpe_product_only"
     assert result.reasoning[0]["cvss"] is None
     assert result.severity in {"low", "medium"}
+
+
+@pytest.mark.asyncio
+async def test_persist_httpx_result_without_local_cve_data_does_not_crash():
+    db = MagicMock()
+    db.add = MagicMock()
+    db.flush = AsyncMock()
+    db.execute = AsyncMock(
+        side_effect=[
+            FakeScalarResult(rows=[]),
+            FakeScalarResult(one=None),
+        ]
+    )
+    ctx = TaskContext(
+        task_id=87,
+        target_id=18,
+        tool_name="httpx_basic",
+        host="198.51.100.13",
+        port=443,
+        protocol="tcp",
+        service="https",
+        open_port_id=17,
+        decision_score_id=54,
+    )
+    outcome = ToolRunOutcome(
+        command="httpx -json",
+        raw_output="{}",
+        parsed_result={"webserver": "nginx", "technologies": ["Nginx"]},
+        success=True,
+        status="completed",
+        error_message=None,
+    )
+
+    with patch("worker.learning_feedback.create_learning_feedback", AsyncMock()):
+        await _persist_result(db, ctx, outcome)
+
+    inserted_matches = [call.args[0] for call in db.add.call_args_list if isinstance(call.args[0], PortCveMatch)]
+    assert inserted_matches == []
