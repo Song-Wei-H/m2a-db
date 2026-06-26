@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 from typing import Any, Dict
 
 from sqlalchemy import select, update
@@ -22,6 +23,7 @@ from app.tool_task_constants import (
 )
 from worker.task_generator import generate_tool_task
 from worker.tool_name_normalizer import normalize_tool_name
+from worker.report_lifecycle import ReportLifecycleManager
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,15 @@ STOP_REASON_MESSAGES = {
 ACTIVE_TASK_STATUSES = {PENDING, RUNNING}
 EXECUTED_OR_SKIPPED_TASK_STATUSES = {COMPLETED, FAILED, REJECTED}
 HTTP_SERVICES = {"http", "https", "ssl/http", "http-alt", "www"}
+
+
+def _schedule_report_export(target_id: int) -> None:
+    try:
+        asyncio.get_running_loop().create_task(
+            ReportLifecycleManager().on_target_completed(target_id)
+        )
+    except RuntimeError:
+        logger.warning("Report export failed. Execution already completed. No retry required. target_id=%s", target_id)
 
 
 def _is_http_service(service: str | None, port: int | None = None) -> bool:
@@ -461,6 +472,8 @@ async def get_next_tool_task(target_id: int, open_port_id: int | None, decision_
                     session=session,
                     stop_reason=reason,
                 )
+                if completed:
+                    _schedule_report_export(target_id)
                 return {
                     "action": "stop",
                     "stop_reason": stop_reason,
@@ -483,6 +496,8 @@ async def get_next_tool_task(target_id: int, open_port_id: int | None, decision_
                 session=session,
                 stop_reason=reason,
             )
+            if completed:
+                _schedule_report_export(target_id)
             return {
                 "action": "stop",
                 "stop_reason": stop_reason,

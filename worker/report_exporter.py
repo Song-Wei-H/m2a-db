@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 import json
+import shutil
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import Any, Literal
 
 
 REPORT_VERSION = "report-export-v1"
+REPORT_GENERATOR_VERSION = "target-report-v1"
 ExportFormat = Literal["json", "html", "pdf", "all"]
 
 
@@ -48,11 +50,23 @@ class ReportExporter:
         return path
 
     def export_all(self, report: dict[str, Any]) -> dict[str, Path]:
-        return {
+        paths = {
             "json": self.export_json(report),
             "html": self.export_html(report),
             "pdf": self.export_pdf(report),
         }
+        self.update_latest(paths)
+        return paths
+
+    def update_latest(self, paths: dict[str, Path]) -> dict[str, Path]:
+        latest_dir = self.output_dir / "latest"
+        latest_dir.mkdir(parents=True, exist_ok=True)
+        latest_paths: dict[str, Path] = {}
+        for extension, path in paths.items():
+            latest_path = latest_dir / f"latest.{extension}"
+            shutil.copyfile(path, latest_path)
+            latest_paths[extension] = latest_path
+        return latest_paths
 
     def export(self, report: dict[str, Any], *, format: ExportFormat) -> Path | dict[str, Path]:
         if format == "json":
@@ -76,6 +90,10 @@ class ReportExporter:
         payload["report_metadata"] = {
             "report_version": REPORT_VERSION,
             "generated_at": datetime.now(UTC).isoformat(),
+            "exported_at": datetime.now(UTC).isoformat(),
+            "export_status": "exported",
+            "export_formats": ["json", "html", "pdf"],
+            "report_generator_version": REPORT_GENERATOR_VERSION,
             "target_id": _target_id(report),
             "scan_run_id": _scan_run_id(report),
             "model_version": _first_present(report, "model_version"),
