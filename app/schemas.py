@@ -124,6 +124,8 @@ class ReportRiskRankingResponse(BaseModel):
 
 
 class ReportMitreMappingResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     mitre_phase: str | None = None
     mitre_technique: str | None = None
 
@@ -134,9 +136,12 @@ class ReportLearningFeedbackResponse(BaseModel):
     confidence_delta: float | None = None
     learning_score: float | None = None
     reason: str | None = None
+    created_at: datetime | None = None
 
 
 class ReportRemediationResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     severity: str | None = None
     recommendation: str | None = None
 

@@ -1,214 +1,133 @@
-# M2A Pentest Platform - Project Context
+# M2A Pentest DB - Project Context
 
-## Project Goal
+This file is the authoritative project context for the repository. If README
+content conflicts with this document, prefer this document.
 
-基於 MITRE ATT&CK 行為映射之 AI 自主滲透測試代理設計與評估。
+## System Positioning
 
-系統透過多輪決策、自動化工具執行、風險評分、學習回饋與報告產出，建立可治理（Governed）的自主弱點驗證平台。
+M2A is a governed autonomous security assessment orchestrator. It coordinates
+allowlisted tools through `ToolTask` records, analyzes evidence, records
+decisions, accumulates learning data, and exports reports.
 
----
+It is not an unrestricted attack agent, credential attack framework, phishing
+delivery system, payload delivery platform, or arbitrary shell execution
+system.
 
-# Current Architecture
+## Current Runtime Architecture
 
+```text
 Target
-↓
-scan_runs
-↓
-Dispatcher
-↓
-Kali Worker
-↓
-Tool Execution
-↓
-tool_results
-↓
-Parser
-↓
-normalized_result
-↓
-evidence_confidence
-↓
-learning_feedback
-↓
-Risk Engine V3
-↓
-Decision Engine
-↓
-Approval Layer
-↓
-Multi-Round Loop
-↓
-Report Generator
+-> ScanRun trace
+-> initial ToolTask
+-> task_poller
+-> governed remote/local tool execution
+-> ToolResult
+-> parser
+-> normalized_results
+-> evidence_confidence
+-> learning_feedback
+-> Risk Engine v3
+-> DecisionScore
+-> auto_loop
+-> next governed ToolTask or stop
+-> Report Generator
+-> Report Export
+```
 
----
+## Source of Truth
 
-# Completed Stages
+`tool_tasks` is the current execution queue and source of truth for worker
+execution.
 
-Stage 1 – Target Ingestion
+`scan_runs` is retained as an initial scan trace and backward-compatible
+container. `POST /targets` creates both a `scan_runs` row and an initial
+`nmap_service` `ToolTask`, but workers execute from `tool_tasks`, not directly
+from `scan_runs`.
 
-Stage 2 – PostgreSQL Integration
+## Completed
 
-Stage 3 – Dispatcher
+- Target creation creates a target, scan run trace, and initial `nmap_service`
+  ToolTask.
+- ToolTask lifecycle states are centralized in `app/tool_task_constants.py` and
+  validated by `app/tool_task_state.py`.
+- Worker polling claims only pending tasks whose approval status is
+  `not_required` or `approved`.
+- Tool execution remains constrained by tool policy, command templates, scope
+  validation, approval gates, and `shell=False` local execution.
+- Remote worker `command` values are stored only as audit data and are not
+  executed locally.
+- Structured parsers, evidence normalization, evidence confidence, MITRE
+  mapping, and learning feedback are implemented.
+- Risk Engine v3 is a deterministic risk engine with learning-informed
+  adjustment. It considers CVSS, EPSS, KEV, runtime signals, evidence quality,
+  and learning feedback. It is not an ML model.
+- Auto multi-round execution supports max round checks, duplicate prevention,
+  HTTP follow-up routing, approval gates, final stop decisions, and target
+  completion.
+- Report Generator returns target summary, ports, tool results, normalized
+  results, evidence confidence, decisions, risk ranking, MITRE mapping,
+  learning summaries, round value summary, matched CVEs, and remediation.
+- Report Export supports JSON, HTML, PDF, latest report files, CLI export, and
+  non-breaking API export.
+- Dashboard and operational endpoints are implemented through the targets API
+  router.
+- Learning framework, offline knowledge prior, adaptive ranking metadata,
+  training dataset pipeline, round labeling, and offline model training
+  framework exist as advisory/offline components.
 
-Stage 4 – Kali Worker
+## Current API Surface
 
-Stage 5 – scan_results + open_ports parsing
+Enabled routers in `app/main.py`:
 
-Stage 6 – Tool Decision Engine
+- `app.api.targets`
+- `app.api.open_ports`
+- `app.routers.decisions`
+- `app.routers.llm_tools`
+- `app.routers.approval`
 
-Stage 7 – LLM Security Boundary
+Key routes:
 
-Stage 8 – Normalized Result Pipeline
+- `POST /targets`
+- `GET /targets/{target_id}/open-ports`
+- `GET /targets/{target_id}/report`
+- `GET /targets/{target_id}/report/export`
+- `GET /targets/{target_id}/report/latest`
+- `GET /targets/{target_id}/summary`
+- `GET /targets/{target_id}/tool-results`
+- `GET /targets/{target_id}/decisions`
+- `GET /targets/{target_id}/learning-feedback`
+- `GET /targets/{target_id}/run-status`
+- `GET /dashboard/overview`
+- `POST /decisions/run/{target_id}`
+- `POST /tools/llm-propose`
+- `GET /approvals/pending`
+- `POST /approvals/{task_id}/approve`
+- `POST /approvals/{task_id}/reject`
 
-Stage 9 – Evidence Confidence Engine
+## Remaining Work
 
-Stage 10 – Human Approval Layer
+- Collect enough real historical `round_learning_labels` for reliable offline
+  model experiments.
+- Validate dataset quality and label distribution on real assessment runs.
+- Add optional external dependencies for richer HTML/PDF rendering if needed.
+- Add production deployment guidance for report retention and cleanup.
+- If runtime model-assisted ranking is desired, add it as a new
+  `ToolRankingStrategy` only. Do not modify Decision Engine, Governance, or
+  ToolTask lifecycle for that integration.
 
-Stage 11 – Governed Command Execution
+## Safety Boundary
 
-Stage 12 – Risk Engine V3
+Do not add:
 
----
+- brute force or credential stuffing
+- password spraying
+- phishing delivery
+- payload delivery
+- EDR or antivirus bypass
+- arbitrary shell execution
+- arbitrary argv execution
+- unrestricted subprocess execution
 
-# Tool Policy
-
-Allowed Tools
-
-* nmap_service
-* httpx_basic
-* nuclei_safe
-* dirb_safe
-* ssh-enum
-* mysql-info
-
-Forbidden
-
-* hydra
-* password spraying
-* brute force
-* arbitrary shell commands
-
----
-
-# Decision Rules
-
-Priority
-
-1. KEV + Critical CVSS
-   → remediate
-
-2. Verification Required
-   → verify
-
-3. next_tool exists
-   → continue
-
-4. next_tool is null
-   → stop
-
----
-
-# Remaining Work
-
-## Stage A
-
-Decision Engine Fix
-
-* remove inconsistent state
-* next_tool exists but stop
-
-## Stage B
-
-Learning Feedback Completion
-
-Fields
-
-* tool_name
-* success
-* service
-* evidence_type
-* learning_score
-* reason
-
-## Stage C
-
-Parser Completion
-
-* nmap_parser
-* httpx_parser
-* nuclei_parser
-* dirb_parser
-* ssh_enum_parser
-* mysql_info_parser
-
-Goal
-
-parsed_output should contain structured evidence.
-
-## Stage D
-
-Auto Multi-Round Loop
-
-Requirements
-
-* max_round
-* duplicate prevention
-* approval gate
-* stop condition
-* retry limit
-
-## Stage E
-
-Report Generator
-
-1. Vulnerability Report
-
-2. Process / Decision Trace Report
-
-## Stage F
-
-Dashboard APIs
-
-GET /targets/{id}/summary
-
-GET /targets/{id}/decisions
-
-GET /targets/{id}/tool-results
-
-GET /targets/{id}/report/vulnerability
-
-GET /targets/{id}/report/process
-
----
-
-# MVP Completion Definition
-
-Target
-↓
-Nmap
-↓
-Open Ports
-↓
-Tool Selection
-↓
-Tool Execution
-↓
-Parser
-↓
-Normalized Result
-↓
-Evidence Confidence
-↓
-Learning Feedback
-↓
-Risk Engine V3
-↓
-Decision Engine
-↓
-Multi-Round Loop
-↓
-Remediation / Stop
-↓
-Vulnerability Report
-↓
-Decision Trace Report
+All new runtime execution must preserve tool registry validation, command
+template rendering, scope validation, approval gates, and ToolTask lifecycle
+rules.

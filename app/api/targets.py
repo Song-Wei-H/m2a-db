@@ -33,7 +33,10 @@ async def _get_report_or_404(target_id: int):
     return report
 
 
-@router.get("/targets/{target_id}/report", response_model=TargetReportResponse)
+@router.get(
+    "/targets/{target_id}/report",
+    response_model=TargetReportResponse,
+)
 async def get_target_report(target_id: int):
     """Generate and return a target report."""
     return await _get_report_or_404(target_id)
@@ -60,7 +63,9 @@ async def export_target_report(target_id: int, format: str = "json"):
 @router.get("/targets/{target_id}/report/latest", response_class=HTMLResponse)
 async def get_latest_target_report_html(target_id: int):
     """Return the latest exported HTML report for demo/development use."""
-    path = Path("reports/latest/latest.html")
+    path = Path("reports/html") / f"target_{target_id}.html"
+    if not path.exists():
+        path = Path("reports/latest/latest.html")
     if not path.exists():
         raise HTTPException(status_code=404, detail="Latest report not found")
     return HTMLResponse(path.read_text(encoding="utf-8"))
@@ -73,7 +78,10 @@ async def get_target_summary(target_id: int):
     return report.get("target_summary", report.get("target", {}))
 
 
-@router.get("/targets/{target_id}/tool-results", response_model=list[ToolResultResponse])
+@router.get(
+    "/targets/{target_id}/tool-results",
+    response_model=list[ToolResultResponse],
+)
 async def get_target_tool_results(target_id: int):
     """Return lightweight tool result data for dashboard views."""
     report = await _get_report_or_404(target_id)
@@ -84,14 +92,20 @@ async def get_target_tool_results(target_id: int):
     )
 
 
-@router.get("/targets/{target_id}/decisions", response_model=list[DecisionResponse])
+@router.get(
+    "/targets/{target_id}/decisions",
+    response_model=list[DecisionResponse],
+)
 async def get_target_decisions(target_id: int):
     """Return target decisions ordered by highest risk first."""
     report = await _get_report_or_404(target_id)
     return report.get("decision_scores", [])
 
 
-@router.get("/targets/{target_id}/learning-feedback", response_model=list[LearningFeedbackResponse])
+@router.get(
+    "/targets/{target_id}/learning-feedback",
+    response_model=list[LearningFeedbackResponse],
+)
 async def get_target_learning_feedback(target_id: int):
     """Return target learning feedback ordered newest first."""
     report = await _get_report_or_404(target_id)

@@ -65,6 +65,9 @@ async def run_remote_tool(ctx: TaskContext) -> ToolRunOutcome:
         parsed_result = fallback
 
     return ToolRunOutcome(
+        # Audit-only string returned by the remote worker. The local worker
+        # never executes this value; local execution remains template/argv
+        # based in worker.tool_runner with shell=False.
         command=data.get("command") or f"remote:{ctx.tool_name}",
         raw_output=raw_output or str(data),
         parsed_result=parsed_result,

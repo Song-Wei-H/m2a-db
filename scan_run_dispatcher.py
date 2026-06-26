@@ -8,6 +8,8 @@ from sqlalchemy import select, update
 from app.config import settings
 from app.database import async_session
 from app.models import ScanRun, ToolTask
+from app.tool_task_constants import ACTIVE_TASK_STATUSES, NOT_REQUIRED, PENDING
+from app.tool_task_writer import create_tool_task_if_not_exists
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +39,7 @@ async def poll_once() -> int:
                 .where(
                     ToolTask.target_id == scan_run.target_id,
                     ToolTask.tool_name == "nmap_service",
-                    ToolTask.status.in_(["pending", "running", "completed"]),
+                    ToolTask.status.in_(ACTIVE_TASK_STATUSES),
                 )
                 .limit(1)
             )
@@ -50,16 +52,16 @@ async def poll_once() -> int:
                 )
                 continue
 
-            task = ToolTask(
+            await create_tool_task_if_not_exists(
+                db,
                 target_id=scan_run.target_id,
+                open_port_id=None,
                 tool_name="nmap_service",
-                status="pending",
+                status=PENDING,
                 approval_required=False,
-                approval_status="not_required",
+                approval_status=NOT_REQUIRED,
                 priority=50,
             )
-
-            db.add(task)
 
             await db.execute(
                 update(ScanRun)
