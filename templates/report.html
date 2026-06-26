@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>M2A Security Assessment Report - Target {{ report.target_summary.target_id }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; color: #17202a; margin: 0; background: #f6f8fb; }
+    header { background: #16213e; color: white; padding: 32px 40px; }
+    main { padding: 28px 40px; }
+    section { background: white; border: 1px solid #dce3eb; border-radius: 6px; margin: 0 0 20px; padding: 20px; }
+    h1, h2 { margin: 0 0 12px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border-bottom: 1px solid #e5eaf0; padding: 8px; text-align: left; vertical-align: top; }
+    th { background: #eef3f8; font-size: 13px; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .metric { background: #f8fafc; border: 1px solid #e5eaf0; border-radius: 6px; padding: 12px; }
+    .badge { border-radius: 999px; display: inline-block; padding: 3px 9px; font-size: 12px; font-weight: 700; }
+    .critical { background: #7f1d1d; color: white; }
+    .high { background: #b91c1c; color: white; }
+    .medium { background: #b45309; color: white; }
+    .low { background: #0369a1; color: white; }
+    .info { background: #475569; color: white; }
+    .timeline { border-left: 3px solid #94a3b8; margin-left: 8px; padding-left: 16px; }
+    .timeline-item { margin: 0 0 14px; }
+    details { margin-top: 12px; }
+    pre { background: #0f172a; color: #e2e8f0; overflow: auto; padding: 12px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>M2A Security Assessment Report</h1>
+    <p>Target {{ report.target_summary.target }} | Status {{ report.target_summary.status }} | Generated {{ report.report_metadata.generated_at }}</p>
+  </header>
+  <main>
+    <section>
+      <h2>Executive Summary</h2>
+      <div class="grid">
+        <div class="metric"><strong>Target ID</strong><br>{{ report.target_summary.target_id }}</div>
+        <div class="metric"><strong>Open Ports</strong><br>{{ report.target_summary.open_port_count }}</div>
+        <div class="metric"><strong>Tool Results</strong><br>{{ report.target_summary.tool_result_count }}</div>
+        <div class="metric"><strong>Highest Risk</strong><br>{{ report.risk_ranking.highest_risk_score }}</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Target Summary</h2>
+      <table>
+        <tr><th>Target</th><td>{{ report.target_summary.target }}</td></tr>
+        <tr><th>Type</th><td>{{ report.target_summary.target_type }}</td></tr>
+        <tr><th>Scope</th><td>{{ report.target_summary.scope }}</td></tr>
+        <tr><th>Round</th><td>{{ report.target_summary.current_round }} / {{ report.target_summary.max_rounds }}</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2>Open Ports</h2>
+      <table>
+        <thead><tr><th>IP</th><th>Port</th><th>Protocol</th><th>Service</th><th>Product</th><th>Version</th><th>State</th></tr></thead>
+        <tbody>
+        {% for port in report.open_ports %}
+          <tr><td>{{ port.ip }}</td><td>{{ port.port }}</td><td>{{ port.protocol }}</td><td>{{ port.service }}</td><td>{{ port.product }}</td><td>{{ port.version }}</td><td>{{ port.state }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Tool Results</h2>
+      <table>
+        <thead><tr><th>Tool</th><th>Success</th><th>Service</th><th>Evidence</th><th>Risk</th><th>Created</th></tr></thead>
+        <tbody>
+        {% for result in report.tool_results %}
+          <tr><td>{{ result.tool_name }}</td><td>{{ result.success }}</td><td>{{ result.service }}</td><td>{{ result.evidence_type }}</td><td>{{ result.risk_level }}</td><td>{{ result.created_at }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Decision Timeline</h2>
+      <div class="timeline">
+      {% for decision in report.decision_scores %}
+        <div class="timeline-item">
+          <span class="badge {{ decision.severity or 'info' }}">{{ decision.severity or 'info' }}</span>
+          <strong>{{ decision.next_action }}</strong>
+          {% if decision.next_tool %}-> {{ decision.next_tool }}{% endif %}
+          <br>Risk {{ decision.risk_score }} | Confidence {{ decision.confidence }}
+          <br>{{ decision.reason }}
+        </div>
+      {% endfor %}
+      </div>
+    </section>
+
+    <section>
+      <h2>Risk Summary</h2>
+      <p>Highest severity: <span class="badge {{ report.risk_ranking.highest_severity or 'info' }}">{{ report.risk_ranking.highest_severity }}</span></p>
+      <table>
+        <thead><tr><th>Action</th><th>Tool</th><th>Severity</th><th>Reason</th></tr></thead>
+        <tbody>
+        {% for action in report.risk_ranking.recommended_next_actions %}
+          <tr><td>{{ action.next_action }}</td><td>{{ action.next_tool }}</td><td>{{ action.severity }}</td><td>{{ action.reason }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>MITRE Mapping</h2>
+      <table>
+        <thead><tr><th>Phase</th><th>Technique</th><th>Count</th></tr></thead>
+        <tbody>
+        {% for mapping in report.mitre_mapping %}
+          <tr><td>{{ mapping.mitre_phase }}</td><td>{{ mapping.mitre_technique }}</td><td>{{ mapping.count }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Learning Summary</h2>
+      <table>
+        <thead><tr><th>Tool</th><th>Service</th><th>Success Rate</th><th>Average Score</th></tr></thead>
+        <tbody>
+        {% for item in report.learning_summary %}
+          <tr><td>{{ item.tool_name }}</td><td>{{ item.service }}</td><td>{{ item.success_rate }}</td><td>{{ item.avg_learning_score }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Round Summary</h2>
+      <table>
+        <thead><tr><th>Decision</th><th>Round</th><th>Tool</th><th>Round Value</th><th>Label Version</th></tr></thead>
+        <tbody>
+        {% for round in report.round_value_summary %}
+          <tr><td>{{ round.decision_score_id }}</td><td>{{ round.round }}</td><td>{{ round.tool_name }}</td><td>{{ round.round_value }}</td><td>{{ round.label_version }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Recommendation</h2>
+      <table>
+        <thead><tr><th>Severity</th><th>Recommendation</th><th>Flags</th></tr></thead>
+        <tbody>
+        {% for item in report.remediation %}
+          <tr><td><span class="badge {{ item.severity or 'info' }}">{{ item.severity }}</span></td><td>{{ item.recommendation }}</td><td>remediation={{ item.requires_remediation }} followup={{ item.requires_followup }} stop={{ item.no_further_action }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <details>
+        <summary>Report Metadata</summary>
+        <pre>{{ report.report_metadata | tojson(indent=2) }}</pre>
+      </details>
+    </section>
+  </main>
+</body>
+</html>

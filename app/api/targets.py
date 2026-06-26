@@ -17,6 +17,7 @@ from app.schemas import (
 )
 from app.tool_task_constants import COMPLETED, FAILED, NOT_REQUIRED, PENDING, RUNNING
 from app.tool_task_writer import create_tool_task_if_not_exists
+from worker.report_exporter import ReportExporter
 from worker.report_generator import generate_target_report
 
 router = APIRouter(tags=["targets"])
@@ -33,6 +34,24 @@ async def _get_report_or_404(target_id: int):
 async def get_target_report(target_id: int):
     """Generate and return a target report."""
     return await _get_report_or_404(target_id)
+
+
+@router.get("/targets/{target_id}/report/export")
+async def export_target_report(target_id: int, format: str = "json"):
+    """Export a generated target report without changing the report API."""
+    if format not in {"json", "html", "pdf", "all"}:
+        raise HTTPException(status_code=400, detail="Unsupported export format")
+    report = await _get_report_or_404(target_id)
+    result = ReportExporter().export(report, format=format)
+    if isinstance(result, dict):
+        files = {key: str(path) for key, path in result.items()}
+    else:
+        files = {format: str(result)}
+    return {
+        "target_id": target_id,
+        "format": format,
+        "files": files,
+    }
 
 
 @router.get("/targets/{target_id}/summary", response_model=TargetSummaryResponse)
