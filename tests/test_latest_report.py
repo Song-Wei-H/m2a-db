@@ -31,3 +31,14 @@ def test_latest_report_api_returns_html():
         assert "M2A Security Assessment Report" in response.text
     finally:
         shutil.rmtree("reports", ignore_errors=True)
+
+
+def test_latest_report_does_not_leak_another_targets_global_latest():
+    shutil.rmtree("reports", ignore_errors=True)
+    try:
+        ReportExporter().export_all(sample_report())
+        response = TestClient(app).get("/targets/999/report/latest")
+
+        assert response.status_code == 404
+    finally:
+        shutil.rmtree("reports", ignore_errors=True)

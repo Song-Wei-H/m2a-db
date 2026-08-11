@@ -28,6 +28,10 @@ postgres_data/
 dist/
 build/
 node_modules/
+.pnpm-store/
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
 
 *.pem
 *.key

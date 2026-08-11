@@ -68,7 +68,8 @@ from `scan_runs`.
   results, evidence confidence, decisions, risk ranking, MITRE mapping,
   learning summaries, round value summary, matched CVEs, and remediation.
 - Report Export supports JSON, HTML, PDF, latest report files, CLI export, and
-  non-breaking API export.
+  non-breaking API export. Export responses include artifact size, SHA-256,
+  and target-scoped download URLs. Latest HTML lookup is target-isolated.
 - Dashboard and operational endpoints are implemented through the targets API
   router.
 - Learning framework, offline knowledge prior, adaptive ranking metadata,
@@ -91,6 +92,7 @@ Key routes:
 - `GET /targets/{target_id}/open-ports`
 - `GET /targets/{target_id}/report`
 - `GET /targets/{target_id}/report/export`
+- `GET /targets/{target_id}/report/download`
 - `GET /targets/{target_id}/report/latest`
 - `GET /targets/{target_id}/summary`
 - `GET /targets/{target_id}/tool-results`

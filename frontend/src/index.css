@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 199 89% 40%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 214 32% 91%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 214 32% 91%;
+    --muted-foreground: 215 16% 40%;
+    --accent: 199 89% 92%;
+    --accent-foreground: 199 89% 26%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214 32% 85%;
+    --input: 214 32% 85%;
+    --ring: 199 89% 40%;
+  }
+
+  .dark {
+    color-scheme: dark;
+    --background: 222 47% 7%;
+    --foreground: 214 32% 91%;
+    --card: 222 43% 10%;
+    --card-foreground: 214 32% 91%;
+    --popover: 222 43% 10%;
+    --popover-foreground: 214 32% 91%;
+    --primary: 199 89% 48%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 214 32% 91%;
+    --muted: 217 33% 14%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 199 89% 16%;
+    --accent-foreground: 199 89% 70%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217 33% 18%;
+    --input: 217 33% 18%;
+    --ring: 199 89% 48%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply min-h-screen bg-background text-foreground antialiased;
+    font-family:
+      Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+      sans-serif;
+  }
+}
+
+@layer components {
+  .soc-panel {
+    @apply rounded-lg border border-border bg-card/90 shadow-sm shadow-cyan-950/20;
+  }
+
+  .section-title {
+    @apply text-sm font-semibold uppercase tracking-[0.08em] text-muted-foreground;
+  }
+
+  .data-grid {
+    @apply grid gap-4;
+  }
+}

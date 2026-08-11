@@ -1,7 +1,8 @@
+import hashlib
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, status, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,19 +54,48 @@ async def export_target_report(target_id: int, format: str = "json"):
         files = {key: str(path) for key, path in result.items()}
     else:
         files = {format: str(result)}
+    artifacts = {
+        key: {
+            "path": path,
+            "size": Path(path).stat().st_size,
+            "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+            "download_url": f"/targets/{target_id}/report/download?format={key}",
+        }
+        for key, path in files.items()
+    }
     return {
         "target_id": target_id,
         "format": format,
         "files": files,
+        "artifacts": artifacts,
     }
+
+
+@router.get("/targets/{target_id}/report/download")
+async def download_target_report(target_id: int, format: str = "pdf"):
+    """Generate and download one report artifact with a stable filename."""
+    if format not in {"json", "html", "pdf"}:
+        raise HTTPException(status_code=400, detail="Unsupported download format")
+    report = await _get_report_or_404(target_id)
+    path = ReportExporter().export(report, format=format)
+    if isinstance(path, dict):
+        raise HTTPException(status_code=500, detail="Unexpected report export result")
+    media_types = {
+        "json": "application/json",
+        "html": "text/html; charset=utf-8",
+        "pdf": "application/pdf",
+    }
+    return FileResponse(
+        path,
+        media_type=media_types[format],
+        filename=f"m2a-target-{target_id}-report.{format}",
+    )
 
 
 @router.get("/targets/{target_id}/report/latest", response_class=HTMLResponse)
 async def get_latest_target_report_html(target_id: int):
     """Return the latest exported HTML report for demo/development use."""
     path = Path("reports/html") / f"target_{target_id}.html"
-    if not path.exists():
-        path = Path("reports/latest/latest.html")
     if not path.exists():
         raise HTTPException(status_code=404, detail="Latest report not found")
     return HTMLResponse(path.read_text(encoding="utf-8"))

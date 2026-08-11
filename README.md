@@ -176,6 +176,7 @@ Key routes:
 | GET | `/targets/{target_id}/open-ports` | List target open ports |
 | GET | `/targets/{target_id}/report` | Return structured target report |
 | GET | `/targets/{target_id}/report/export` | Export report to JSON/HTML/PDF |
+| GET | `/targets/{target_id}/report/download` | Generate and download one JSON/HTML/PDF artifact |
 | GET | `/targets/{target_id}/report/latest` | Return latest exported HTML report |
 | GET | `/targets/{target_id}/summary` | Dashboard target summary |
 | GET | `/targets/{target_id}/tool-results` | Dashboard tool results |
@@ -210,6 +211,10 @@ reports/latest/
 ```
 
 Generated reports are ignored by Git.
+
+The export API also returns artifact size, SHA-256, and a download URL for each
+generated format. The latest-report route is target-scoped and never falls back
+to another target's global latest report.
 
 ## Tests
 
