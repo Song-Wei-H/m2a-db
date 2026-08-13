@@ -129,7 +129,7 @@ class PostgreSQLTrainingRepository:
                 "dataset_version": dataset_version,
                 "feature_version": feature_version,
                 "label_version": label_version,
-                "created_at": datetime.now(UTC),
+                "created_at": datetime.now(UTC).replace(tzinfo=None),
             },
         )
         row = result.fetchone()

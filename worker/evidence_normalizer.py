@@ -63,11 +63,11 @@ def _base_evidence(
 # HTTPX normalizer
 # ---------------------------------------------------------------------------
 
-def _httpx_items(parsed_output: dict[str, Any]) -> list[tuple[int, str | None]]:
+def _httpx_items(parsed_output: dict[str, Any]) -> list[tuple[int, str | None, dict[str, Any]]]:
     """Support both results[] and status_codes + urls parser formats."""
-    results = parsed_output.get("results")
+    results = parsed_output.get("results") or parsed_output.get("services") or parsed_output.get("entries")
     if isinstance(results, list):
-        items: list[tuple[int, str | None]] = []
+        items: list[tuple[int, str | None, dict[str, Any]]] = []
         for row in results:
             if not isinstance(row, dict):
                 continue
@@ -75,7 +75,7 @@ def _httpx_items(parsed_output: dict[str, Any]) -> list[tuple[int, str | None]]:
             if status_code is None:
                 continue
             url = row.get("url")
-            items.append((status_code, str(url) if url is not None else None))
+            items.append((status_code, str(url) if url is not None else None, row))
         return items
 
     status_codes = parsed_output.get("status_codes") or []
@@ -86,13 +86,13 @@ def _httpx_items(parsed_output: dict[str, Any]) -> list[tuple[int, str | None]]:
     if not isinstance(urls, list):
         urls = [urls]
 
-    items: list[tuple[int, str | None]] = []
+    items: list[tuple[int, str | None, dict[str, Any]]] = []
     for index, raw_status in enumerate(status_codes):
         status_code = _coerce_status_code(raw_status)
         if status_code is None:
             continue
         url = urls[index] if index < len(urls) else None
-        items.append((status_code, str(url) if url is not None else None))
+        items.append((status_code, str(url) if url is not None else None, {}))
     return items
 
 
@@ -103,7 +103,7 @@ def _httpx_normalize(
     tool_result_id: int | None = None,
 ) -> list[Evidence]:
     evidence_list: list[Evidence] = []
-    for status_code, url in _httpx_items(parsed_output):
+    for status_code, url, row in _httpx_items(parsed_output):
         parsed_url = urlparse(url) if url else None
         inferred_port = parsed_url.port if parsed_url else None
         if inferred_port is None and parsed_url:
@@ -124,6 +124,10 @@ def _httpx_normalize(
             "service": evidence["service"],
             "port": evidence["port"],
             "exposed": 200 <= status_code <= 399,
+            "product": row.get("product") or row.get("webserver"),
+            "version": row.get("version"),
+            "version_source": "httpx_explicit_field" if row.get("version") else None,
+            "version_status": "observed" if row.get("version") else "not_observed",
         })
         evidence_list.append(evidence)
     return evidence_list

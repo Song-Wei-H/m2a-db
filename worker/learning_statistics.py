@@ -25,9 +25,17 @@ class LearningStatisticsProvider:
         self.session = session
 
     async def get_tool_statistics(self, context: LearningContext) -> dict[str, dict[str, Any]]:
+        filters: list[str] = []
+        parameters: dict[str, Any] = {}
+        for field in ("service", "evidence_type", "port_bucket"):
+            value = getattr(context, field)
+            if value is not None:
+                filters.append(f"{field} = :{field}")
+                parameters[field] = value
+        where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
         result = await self.session.execute(
             text(
-                """
+                f"""
                 SELECT
                     tool_name,
                     service,
@@ -40,16 +48,10 @@ class LearningStatisticsProvider:
                     avg_learning_score,
                     last_seen
                 FROM learning_tool_context_score
-                WHERE (:service IS NULL OR service = :service)
-                  AND (:evidence_type IS NULL OR evidence_type = :evidence_type)
-                  AND (:port_bucket IS NULL OR port_bucket = :port_bucket)
+                {where_clause}
                 """
             ),
-            {
-                "service": context.service,
-                "evidence_type": context.evidence_type,
-                "port_bucket": context.port_bucket,
-            },
+            parameters,
         )
         rows = result.fetchall()
         return {_mapping(row)["tool_name"]: dict(_mapping(row)) for row in rows}

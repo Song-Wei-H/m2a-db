@@ -36,9 +36,10 @@ def test_import_tool_policy_does_not_write_stdout(capsys):
 
 
 @pytest.mark.asyncio
-async def test_tool_request_creation_uses_model_fields_without_type_error():
+async def test_tool_request_creation_uses_model_fields_without_type_error(monkeypatch):
     from app.tool_task_dispatcher import dispatch_llm_tool_proposal
 
+    monkeypatch.setattr(settings, "allowed_scopes", "192.0.2.0/24")
     target = SimpleNamespace(id=7, target="192.0.2.20", scope="internal")
     db = MagicMock()
     db.execute = AsyncMock(side_effect=[FakeScalarResult(target), FakeScalarResult(None)])

@@ -36,6 +36,9 @@ def _normalize_entry(entry: dict) -> dict:
         "content_length": entry.get("content_length") or entry.get("content-length") or entry.get("content_length_bytes"),
         "technologies": technologies,
         "webserver": entry.get("webserver") or entry.get("web_server") or entry.get("server"),
+        # Preserve only an explicitly emitted version value.  A product name,
+        # page title, or guessed banner is never upgraded into version evidence.
+        "version": entry.get("version") or entry.get("webserver_version") or entry.get("web_server_version"),
         "host": _host_from_url(entry.get("url")),
         "cpe": cpe,
     }
@@ -150,6 +153,7 @@ def parse_httpx_output(
             "content_length": entry.get("content_length"),
             "technologies": entry.get("technologies") or [],
             "webserver": entry.get("webserver"),
+            "version": entry.get("version"),
             "host": entry.get("host"),
             "cpe": entry.get("cpe") or [],
         }

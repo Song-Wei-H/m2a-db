@@ -36,6 +36,15 @@ def test_report_export_api_rejects_invalid_format():
     assert response.status_code == 400
 
 
+def test_report_exporter_uses_project_root_when_called_from_another_directory():
+    from worker.report_exporter import PROJECT_ROOT, ReportExporter
+
+    exporter = ReportExporter()
+
+    assert exporter.output_dir == PROJECT_ROOT / "reports"
+    assert exporter.template_path == PROJECT_ROOT / "templates" / "report.html"
+
+
 def test_report_download_api_returns_attachment():
     shutil.rmtree("reports", ignore_errors=True)
     try:

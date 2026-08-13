@@ -63,6 +63,7 @@ async def test_postgresql_training_repository_append_round_persists_versions():
     assert params["dataset_version"] == DATASET_VERSION
     assert params["feature_version"] == FEATURE_VECTOR_VERSION
     assert params["label_version"] == LABEL_VERSION
+    assert params["created_at"].tzinfo is None
 
 
 @pytest.mark.asyncio

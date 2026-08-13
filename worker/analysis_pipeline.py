@@ -28,6 +28,7 @@ from worker.training_repository import PostgreSQLTrainingRepository
 from worker.tool_ranking import DeterministicRanking, ToolRank
 from worker.tool_name_normalizer import normalize_tool_name
 from worker.auto_loop import get_next_tool_task
+from worker.version_gate import requires_version_verification, version_verification_decision
 
 __all__ = ["analyze_tool_result_and_generate_task"]
 
@@ -356,6 +357,13 @@ async def _generate_tasks_from_nmap_open_ports(target_id: int) -> list[dict[str,
                 },
                 "reasoning": risk_v3.reasoning,
             }
+            if requires_version_verification(cve_summary):
+                nmap_decision_result.update(
+                    version_verification_decision(
+                        cve_summary=cve_summary,
+                        tool_name="nmap_service",
+                    )
+                )
             learning_pipeline_result = await _record_runtime_learning_round(
                 db=db,
                 target_id=target_id,
@@ -398,14 +406,18 @@ async def _generate_tasks_from_nmap_open_ports(target_id: int) -> list[dict[str,
                 severity=risk_v3.severity,
                 confidence=risk_v3.confidence_score,
 
-                next_action=risk_v3.next_action,
-                next_tool=risk_v3.next_tool,
+                next_action=nmap_decision_result["recommended_action"],
+                next_tool=nmap_decision_result["recommended_tool"],
 
                 mitre_phase=score["mitre_phase"],
                 mitre_technique=score["mitre_technique"],
 
-                reason="Risk Engine v3 generated learning-adjusted base risk",
-                reasoning=risk_v3.reasoning,
+                reason=(
+                    "Version verification required before CVE validation"
+                    if nmap_decision_result.get("verification_state")
+                    else "Risk Engine v3 generated learning-adjusted base risk"
+                ),
+                reasoning=nmap_decision_result["reasoning"],
 
                 input_snapshot={
                     "stage": "base_risk_v3",
@@ -426,6 +438,8 @@ async def _generate_tasks_from_nmap_open_ports(target_id: int) -> list[dict[str,
                         "best_match_type": cve_summary.best_match_type,
                         "best_match_confidence": cve_summary.best_match_confidence,
                     },
+                    "cve_gate": nmap_decision_result.get("cve_gate"),
+                    "verification_state": nmap_decision_result.get("verification_state"),
                     **learning_pipeline_result.metadata(),
                 },
             )
@@ -433,7 +447,7 @@ async def _generate_tasks_from_nmap_open_ports(target_id: int) -> list[dict[str,
             db.add(decision)
             await db.flush()
 
-            next_tool = risk_v3.next_tool
+            next_tool = nmap_decision_result["recommended_tool"]
 
             current_round = target.current_round or 1
             max_round = target.max_round or 5
@@ -755,6 +769,12 @@ async def analyze_tool_result_and_generate_task(
     )
 
     if not evidence_list:
+        timeout_detected = "timeout" in str(parsed_output.get("reason") or "").lower() or "timeout" in raw_output.lower()
+        timeout_reason = (
+            "nuclei_safe timed out; worker preflight and a separately approved retry are required"
+            if tool_name == "nuclei_safe" and timeout_detected
+            else f"{tool_name} produced no normalized evidence; stopping auto loop"
+        )
         async with async_session() as db, db.begin():
             decision_result = {
                 "recommended_tool": None,
@@ -762,7 +782,11 @@ async def analyze_tool_result_and_generate_task(
                 "priority": 0,
                 "requires_approval": False,
                 "risk_score": 0.0,
-                "reasoning": ["No normalized evidence was produced by the parser/normalizer"],
+                "reasoning": [
+                    "Worker execution timed out; this is a Tool Failure, not a clean result or No Finding."
+                    if tool_name == "nuclei_safe" and timeout_detected
+                    else "No normalized evidence was produced by the parser/normalizer"
+                ],
             }
             learning_pipeline_result = await _record_runtime_learning_round(
                 db=db,
@@ -792,14 +816,19 @@ async def analyze_tool_result_and_generate_task(
                 next_tool=None,
                 mitre_phase=None,
                 mitre_technique=None,
-                reason=f"{tool_name} produced no normalized evidence; stopping auto loop",
-                reasoning=["No normalized evidence was produced by the parser/normalizer"],
+                reason=timeout_reason,
+                reasoning=decision_result["reasoning"],
                 input_snapshot={
                     "stage": "no_normalized_evidence",
                     "tool_name": tool_name,
                     "tool_result_id": tool_result_id,
                     "previous_decision_score_id": decision_score_id,
                     "parsed_output": parsed_output,
+                    "validation_state": "TOOL_FAILURE" if timeout_detected else "NO_NORMALIZED_EVIDENCE",
+                    "retry_policy": {
+                        "automatic_retry": False,
+                        "required_before_retry": ["worker_preflight", "human_approval"] if timeout_detected else [],
+                    },
                     **learning_pipeline_result.metadata(),
                 },
             )
@@ -810,7 +839,14 @@ async def analyze_tool_result_and_generate_task(
         task_result = await get_next_tool_task(
             target_id=target_id,
             open_port_id=open_port_id,
-            decision_result={**decision_result, "decision_score_id": new_decision_score_id},
+            decision_result={
+                **decision_result,
+                "decision_score_id": new_decision_score_id,
+                # A failed or unparseable result must terminate this chain.  It is
+                # not equivalent to a completed clean scan, which may use the
+                # governed HTTP follow-up candidate path.
+                "suppress_http_followup": True,
+            },
         )
 
         return [
@@ -899,6 +935,13 @@ async def analyze_tool_result_and_generate_task(
             },
             "reasoning": risk_v3.reasoning,
         }
+        if requires_version_verification(cve_summary):
+            decision_result.update(
+                version_verification_decision(
+                    cve_summary=cve_summary,
+                    tool_name=tool_name,
+                )
+            )
         round_value = calculate_round_value(
             new_findings=1 if evidence else 0,
             new_cve=int((cve_summary.cve_count if cve_summary else 0) or 0),
@@ -911,7 +954,7 @@ async def analyze_tool_result_and_generate_task(
         decision_result["feature_vector_version"] = FEATURE_VECTOR_VERSION
         decision_result["label_version"] = LABEL_VERSION
 
-        candidate_tools = [risk_v3.next_tool] if risk_v3.next_tool else []
+        candidate_tools = [risk_v3.next_tool] if risk_v3.next_tool and not decision_result.get("suppress_http_followup") else []
         async with async_session() as db:
             learning_metadata = await _build_learning_metadata(
                 session=db,
@@ -992,15 +1035,19 @@ async def analyze_tool_result_and_generate_task(
                 severity=risk_v3.severity,
                 confidence=risk_v3.confidence_score,
 
-                next_action=risk_v3.next_action,
-                next_tool=risk_v3.next_tool,
+                next_action=decision_result["recommended_action"],
+                next_tool=decision_result["recommended_tool"],
 
                 mitre_phase=mitre_mapping.get("attack_phase")
                 or mitre_mapping.get("tactic"),
                 mitre_technique=mitre_mapping.get("technique_id"),
 
-                reason="Risk Engine v3 generated learning-adjusted risk",
-                reasoning=risk_v3.reasoning,
+                reason=(
+                    "Version verification required before CVE validation"
+                    if decision_result.get("verification_state")
+                    else "Risk Engine v3 generated learning-adjusted risk"
+                ),
+                reasoning=decision_result["reasoning"],
 
                 input_snapshot={
                     "stage": "adjusted_risk_v3",
@@ -1015,6 +1062,8 @@ async def analyze_tool_result_and_generate_task(
                     "round_value": round_value,
                     "feature_vector_version": FEATURE_VECTOR_VERSION,
                     "label_version": LABEL_VERSION,
+                    "cve_gate": decision_result.get("cve_gate"),
+                    "verification_state": decision_result.get("verification_state"),
                     **learning_pipeline_result.metadata(),
                     **learning_metadata,
                 },

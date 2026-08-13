@@ -19,17 +19,18 @@ from typing import Any, Literal
 REPORT_VERSION = "report-export-v1"
 REPORT_GENERATOR_VERSION = "target-report-v1"
 ExportFormat = Literal["json", "html", "pdf", "all"]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReportExporter:
     def __init__(
         self,
         *,
-        output_dir: str | Path = "reports",
-        template_path: str | Path = "templates/report.html",
+        output_dir: str | Path | None = None,
+        template_path: str | Path | None = None,
     ):
-        self.output_dir = Path(output_dir)
-        self.template_path = Path(template_path)
+        self.output_dir = PROJECT_ROOT / "reports" if output_dir is None else Path(output_dir)
+        self.template_path = PROJECT_ROOT / "templates" / "report.html" if template_path is None else Path(template_path)
 
     def export_json(self, report: dict[str, Any]) -> Path:
         path = self._path_for(report, "json")
@@ -118,19 +119,134 @@ class ReportExporter:
 
     def _write_pdf(self, report: dict[str, Any], path: Path) -> None:
         try:
+            from reportlab.lib import colors
             from reportlab.lib.pagesizes import LETTER
-            from reportlab.pdfgen import canvas
+            from reportlab.lib.styles import getSampleStyleSheet
+            from reportlab.lib.units import inch
+            from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-            canvas_obj = canvas.Canvas(str(path), pagesize=LETTER)
-            text = canvas_obj.beginText(72, 720)
-            text.setFont("Helvetica", 11)
-            for line in _pdf_lines(report):
-                text.textLine(line[:100])
-            canvas_obj.drawText(text)
-            canvas_obj.save()
+            styles = getSampleStyleSheet()
+            styles["BodyText"].leading = 14
+            document = SimpleDocTemplate(
+                str(path),
+                pagesize=LETTER,
+                rightMargin=0.55 * inch,
+                leftMargin=0.55 * inch,
+                topMargin=0.55 * inch,
+                bottomMargin=0.55 * inch,
+            )
+            story = [Paragraph("M2A Security Assessment Report", styles["Title"]), Spacer(1, 12)]
+            summary = report.get("target_summary") or {}
+            risk = report.get("risk_ranking") or {}
+            _append_pdf_section(
+                story,
+                "Executive Summary",
+                [
+                    ["Target", summary.get("target")],
+                    ["Status", summary.get("status")],
+                    ["Scope", summary.get("scope")],
+                    ["Highest severity", risk.get("highest_severity")],
+                    ["Highest risk score", risk.get("highest_risk_score")],
+                ],
+                styles,
+            )
+            _append_pdf_table(
+                story,
+                "Open Ports",
+                ["IP", "Port", "Protocol", "Service", "Product"],
+                [[row.get("ip"), row.get("port"), row.get("protocol"), row.get("service"), row.get("product")] for row in report.get("open_ports", [])],
+                styles,
+            )
+            _append_pdf_table(
+                story,
+                "Tool Results",
+                ["Tool", "Success", "Evidence", "Risk", "Service"],
+                [[row.get("tool_name"), row.get("success"), row.get("evidence_type"), row.get("risk_level"), row.get("service")] for row in report.get("tool_results", [])],
+                styles,
+            )
+            _append_pdf_table(
+                story,
+                "Decision Timeline",
+                ["Severity", "Risk", "Action", "Next tool", "Reason"],
+                [[row.get("severity"), row.get("risk_score"), row.get("next_action"), row.get("next_tool"), row.get("reason")] for row in report.get("decision_scores", [])],
+                styles,
+            )
+            _append_pdf_table(
+                story,
+                "CVE Candidates - Version Verification Required",
+                ["CVE", "CVSS", "Severity", "Match", "Confidence", "Affected version"],
+                [
+                    [
+                        row.get("cve_id") or row.get("cve"),
+                        row.get("cvss_score") if row.get("cvss_score") is not None else row.get("cvss"),
+                        row.get("severity"),
+                        row.get("match_type"),
+                        row.get("match_confidence"),
+                        row.get("affected_version") or "Version range must be verified",
+                    ]
+                    for row in report.get("matched_cves", [])
+                ],
+                styles,
+            )
+            _append_pdf_table(
+                story,
+                "MITRE Mapping",
+                ["Phase", "Technique", "Count"],
+                [[row.get("mitre_phase"), row.get("mitre_technique"), row.get("count")] for row in report.get("mitre_mapping", [])],
+                styles,
+            )
+            _append_pdf_table(
+                story,
+                "Recommendations",
+                ["Severity", "Recommendation"],
+                [[row.get("severity"), row.get("recommendation")] for row in report.get("remediation", [])],
+                styles,
+            )
+            document.build(story)
             return
         except Exception:
             path.write_bytes(_minimal_pdf(_pdf_lines(report)))
+
+
+def _pdf_value(value: Any) -> str:
+    return html.escape("-" if value is None or value == "" else str(value))
+
+
+def _append_pdf_section(story: list[Any], title: str, rows: list[list[Any]], styles: Any) -> None:
+    _append_pdf_table(story, title, ["Field", "Value"], rows, styles)
+
+
+def _append_pdf_table(
+    story: list[Any], title: str, headers: list[str], rows: list[list[Any]], styles: Any
+) -> None:
+    from reportlab.lib import colors
+    from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
+
+    story.extend([Paragraph(title, styles["Heading2"]), Spacer(1, 4)])
+    safe_rows = rows or [["No data recorded"] + [""] * (len(headers) - 1)]
+    data = [
+        [Paragraph(_pdf_value(cell), styles["BodyText"]) for cell in headers],
+        *[
+            [Paragraph(_pdf_value(cell), styles["BodyText"]) for cell in row]
+            for row in safe_rows
+        ],
+    ]
+    table = Table(data, repeatRows=1, hAlign="LEFT")
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A5F")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#CBD5E1")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.extend([table, Spacer(1, 12)])
 
 
 def _target_id(report: dict[str, Any]) -> Any:
@@ -302,3 +418,4 @@ def _minimal_pdf(lines: list[str]) -> bytes:
 def _pdf_text(value: str) -> str:
     escaped = value.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)").replace("\n", "\\n")
     return f"({escaped})"
+

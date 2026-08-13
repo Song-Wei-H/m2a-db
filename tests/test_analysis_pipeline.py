@@ -466,6 +466,7 @@ async def test_analysis_pipeline_creates_stop_decision_when_no_normalized_eviden
     mock_next.assert_awaited_once()
     assert mock_next.await_args.kwargs["decision_result"]["recommended_action"] == "stop"
     assert mock_next.await_args.kwargs["decision_result"]["recommended_tool"] is None
+    assert mock_next.await_args.kwargs["decision_result"]["suppress_http_followup"] is True
     assert results[0]["task_result"]["target_completed"] is True
 
 

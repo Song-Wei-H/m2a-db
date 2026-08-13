@@ -70,3 +70,19 @@ async def test_learning_statistics_defaults_when_no_rows():
     assert await provider.get_tool_success_rate("nuclei_safe") == 0.5
     assert await provider.get_average_learning_score("nuclei_safe") == 0.5
     assert await provider.get_total_observations() == 0
+
+
+@pytest.mark.asyncio
+async def test_learning_statistics_omits_null_context_filters():
+    context = LearningContext.from_target(
+        open_port=SimpleNamespace(port=None, service=None),
+        evidence={"evidence_type": "http_service"},
+    )
+    session = FakeSession([])
+
+    await LearningStatisticsProvider(session).get_tool_statistics(context)
+
+    sql, params = session.calls[0]
+    assert "service = :service" not in sql
+    assert "evidence_type = :evidence_type" in sql
+    assert params == {"evidence_type": "http_service", "port_bucket": "unknown"}

@@ -2,7 +2,7 @@ from worker.parsers.httpx_parser import parse_httpx_output
 
 
 def test_httpx_parser_extracts_json_service():
-    raw = '{"url":"https://target","status_code":200,"title":"Welcome","content_length":1234,"tech":["nginx"],"webserver":"nginx"}'
+    raw = '{"url":"https://target","status_code":200,"title":"Welcome","content_length":1234,"tech":["nginx"],"webserver":"nginx","version":"1.26.1"}'
 
     parsed = parse_httpx_output(raw)
 
@@ -14,6 +14,7 @@ def test_httpx_parser_extracts_json_service():
     assert service["content_length"] == 1234
     assert service["technologies"] == ["nginx"]
     assert service["webserver"] == "nginx"
+    assert service["version"] == "1.26.1"
 
 
 def test_httpx_parser_extracts_plain_line():
