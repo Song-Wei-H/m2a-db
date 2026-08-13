@@ -1,83 +1,65 @@
-# M2A Pentest DB
+# M2A 受治理安全評估平台
 
-M2A is a governed autonomous security assessment orchestrator built with
-FastAPI, PostgreSQL, and worker-side tool execution.
+M2A 是以 FastAPI、PostgreSQL 與受治理 Worker 組成的安全評估協調平台。它只適用於具有明確授權的內部實驗室、防守驗證與紅藍隊演練。
 
-The project implements a deterministic-first and auditable execution loop for
-authorized defensive security assessment workflows.
+權威專案邊界以 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) 為準；若本文件與該檔案衝突，依 `PROJECT_CONTEXT.md` 執行。
 
-Authoritative project context:
+## 1. 安全邊界
 
-```text
-PROJECT_CONTEXT.md
-```
+M2A 不是可任意下指令的攻擊代理。LLM 或外部決策器只能提出結構化建議，實際執行仍受以下控制：
 
-If this README and `PROJECT_CONTEXT.md` conflict, follow `PROJECT_CONTEXT.md`.
+- 授權範圍（Scope）與目標驗證
+- 工具白名單與固定命令模板
+- 高風險操作人工核准
+- ToolTask 狀態機、重複阻擋與最大輪數
+- Worker 端再次檢查
+- `subprocess(..., shell=False)`
 
-## Safety Notice
+禁止加入或使用任意 Shell、任意 argv、帳密暴力破解、密碼噴灑、釣魚、Payload 投遞、惡意持久化、EDR／防毒規避或未授權掃描。
 
-This repository is for governed, authorized, defensive security assessment
-only. Do not use it against systems without explicit authorization.
+## 2. 系統角色、設備與連線
 
-The platform is intentionally constrained by:
+最小部署可使用一臺 Windows 主機；完整內網演練建議分成三個角色：
 
-- allowlisted tools
-- command templates
-- scope validation
-- approval gates
-- ToolTask lifecycle controls
-- local `subprocess(..., shell=False)` execution boundaries
+| 角色 | 建議設備 | 服務／Port | 責任 |
+|---|---|---|---|
+| M2A 控制端 | Windows 開發機 | API `127.0.0.1:8000`、UI `127.0.0.1:5173` | UI、API、治理、報告與人工核准 |
+| PostgreSQL | 同一 Windows 的 Docker Desktop | Host `localhost:15432` → container `5432` | Target、ToolTask、Evidence、Decision 與稽核紀錄 |
+| Worker | Kali Linux 或安裝安全工具的受控主機 | 直接連 PostgreSQL；舊 Remote Runner 才使用 HTTP `/execute` | 從 ToolTask 取件並執行白名單工具 |
+| 授權靶機 | 隔離 Lab VM／測試設備 | 依測試情境 | 只接受已書面授權的安全驗證 |
 
-Do not extend this repository with credential attacks, phishing delivery,
-payload delivery, exploit-chain automation, EDR or antivirus bypass, arbitrary
-shell execution, arbitrary argv execution, or unrestricted subprocess
-execution.
-
-## System Positioning
-
-M2A is not a traditional vulnerability scanner. It coordinates approved tools
-through governed `ToolTask` records, analyzes evidence, records decisions,
-accumulates learning data, and exports reports.
-
-Current execution source of truth:
-
-- `tool_tasks`: worker execution queue and lifecycle source of truth
-- `scan_runs`: initial scan trace and backward-compatible container
-
-`POST /targets` creates both a `scan_runs` row and an initial `nmap_service`
-`ToolTask`. Workers execute from `tool_tasks`.
-
-## Current Runtime Flow
+建議網路流向：
 
 ```text
-Target
--> ScanRun trace
--> initial ToolTask
--> task_poller
--> governed tool execution
--> ToolResult
--> parser
--> normalized_results
--> evidence_confidence
--> learning_feedback
--> Risk Engine v3
--> DecisionScore
--> auto_loop
--> next governed ToolTask or stop
--> Report Generator
--> Report Export
+瀏覽器 -> M2A UI :5173 -> M2A API :8000 -> PostgreSQL :15432
+                                                ^
+                                                |
+                              Kali Worker ------+
+                                   |
+                                   +----> 授權靶機
 ```
 
-Risk Engine v3 is a deterministic risk engine with learning-informed
-adjustments. It is not an ML model. It considers CVSS, EPSS, KEV, runtime
-signals, evidence quality, and learning feedback.
+### 雙網路工作方式
 
-Offline model training modules exist for experiments only. They are not wired
-into runtime decision making.
+若內網可連 Kali 但不能連 GitHub，採兩階段操作：
 
-## Allowed Tools
+1. 外網階段：安裝依賴、拉取／推送 GitHub；不要執行安全工具。
+2. 內網階段：啟動 PostgreSQL、API、UI、Kali Worker 與授權靶機；所有變更先保留在本機 Git。
+3. 切回外網後：確認不含 `.env`、報告、資料庫或秘密，再 push。
 
-Current allowlisted tools:
+不要為了同時連線而開放 PostgreSQL、API 或 Worker 到公共網路。
+
+## 3. 前置需求
+
+控制端：
+
+- Windows 10/11
+- Python 3.11 或相容版本
+- Docker Desktop（Linux containers）
+- Node.js 與 pnpm（使用 UI 時）
+- Git（只在版本同步時需要）
+
+Kali Worker 需安裝 Repository 的 Python dependencies，以及實際允許使用的工具。目前 canonical allowlist：
 
 - `nmap_service`
 - `httpx_basic`
@@ -86,149 +68,300 @@ Current allowlisted tools:
 - `ssh-enum`
 - `mysql-info`
 
-Forbidden capabilities include:
+缺少工具時應讓任務失敗並留下紀錄，不得改成任意 Shell 繞過。
 
-- hydra or brute force
-- password spraying
-- credential stuffing
-- phishing delivery
-- payload delivery
-- raw shell execution
-- arbitrary argv execution
+## 4. 第一次安裝 SOP
 
-## Configuration
+### 4.1 建立 Python 環境
 
-Copy `.env.example` to `.env` and adjust local values:
+在 Repository 根目錄執行：
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+### 4.2 建立 `.env`
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Important settings:
+至少修改：
 
 ```env
-DATABASE_URL=postgresql+asyncpg://m2a_user:replace_me@localhost:15432/m2a_pentest
-KALI_WORKER_BASE_URL=http://192.0.2.10:9001
-ALLOWED_SCOPES=192.0.2.0/24,203.0.113.0/24
+POSTGRES_PASSWORD=請使用本機專用強密碼
+DATABASE_URL=postgresql+asyncpg://m2a_user:同一密碼@localhost:15432/m2a_pentest
+
+# 僅填入實際獲授權的內網／Lab 範圍
+ALLOWED_SCOPES=192.168.56.0/24
 ALLOWED_TOOLS=nmap_service,httpx_basic,nuclei_safe,dirb_safe,ssh-enum,mysql-info
 ALLOWED_LLM_PROFILES=internal
 ```
 
-Use documentation IP ranges in examples. Replace them only for an authorized
-local environment.
+規則：
 
-## Install
+- `.env` 不得 commit、貼入 Issue、Notion 或聊天。
+- `POSTGRES_PASSWORD` 與 `DATABASE_URL` 中的密碼必須一致。
+- 如果密碼含 `@`、`:`、`/` 等字元，需作 URL encoding。
+- `ALLOWED_SCOPES` 必須先由人確認授權，不可用 `0.0.0.0/0`。
 
-```powershell
-py -m venv .venv
-.\.venv\Scripts\python -m pip install -r requirements.txt
+### 4.3 API Key 要加在哪裡
+
+目前 M2A **沒有直接呼叫 NVIDIA、OpenAI 或 Anthropic API**。程式也沒有讀取 `LLM_API_KEY`；不要把供應商 Key 放進 `.env`。
+
+目前正確整合方式是由外部 LLM／決策服務產生受 schema 約束的提案，再呼叫：
+
+```text
+POST http://<M2A_API>/tools/llm-propose
 ```
 
-## Database
+供應商 API Key 應只存在外部決策服務的 secret store，而不是瀏覽器、Notion、Git 或 M2A 前端。未來若加入 M2A 內建 provider client，必須先加入明確設定欄位、secret handling、egress policy、測試與人工審查。
 
-Start PostgreSQL:
+### 4.4 啟動 PostgreSQL
+
+先確認 Docker Desktop 已啟動，再執行：
 
 ```powershell
 docker compose up -d postgres
+docker compose ps
+docker logs --tail 50 m2a-postgres
 ```
 
-Schema bootstrap uses SQL files in `initdb/`. Existing databases should apply
-migrations in filename order.
+預期看到 `m2a-postgres` 為 `Up`，Host port 為 `15432`。
 
-## Start Services
+不要把 PostgreSQL 改成 `trust` authentication。PostgreSQL 官方文件說明 `trust` 會讓符合連線條件的人不需密碼即可宣告任意資料庫使用者身分；M2A 預設使用密碼驗證。參考：[PostgreSQL Trust Authentication](https://www.postgresql.org/docs/current/auth-trust.html)。
 
-API:
+### 4.5 既有資料庫套用 migration
+
+`initdb/` 只會在建立全新 PostgreSQL data volume 時自動執行。既有資料庫必須依檔名順序手動套用尚未執行的 migration。
+
+Windows PowerShell 範例：
 
 ```powershell
-.\.venv\Scripts\python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+Get-Content -Raw .\initdb\021_tooltask_lifecycle_alignment.sql |
+  docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
+
+Get-Content -Raw .\initdb\024_approval_decision_audit.sql |
+  docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
 ```
 
-Worker:
+若 API 報告 `column tool_tasks.approved_at does not exist`，代表既有 volume 漏套 021；先執行 021，再執行 024。
+
+若 API 報告 `password authentication failed for user "m2a_user"`，常見原因是 PostgreSQL volume 建立後才修改 `.env`。`POSTGRES_PASSWORD` 不會自動更新既有 role；請先確認 `.env` 中 `POSTGRES_PASSWORD` 與 `DATABASE_URL` 一致，再由資料庫管理者以受控方式更新 role 密碼。不要改用 `trust` 規避。
+
+驗證欄位：
 
 ```powershell
-.\.venv\Scripts\python -m worker.task_poller
+docker exec m2a-postgres psql -U m2a_user -d m2a_pentest -c `
+  "SELECT column_name FROM information_schema.columns WHERE table_name='tool_tasks' AND column_name IN ('proposal_reason','approval_decision_reason');"
 ```
 
-Optional scan run dispatcher for backward-compatible scan trace processing:
+## 5. 每次啟動 SOP
+
+請開四個終端，順序如下。
+
+### 終端 A：PostgreSQL
 
 ```powershell
-.\.venv\Scripts\python scan_run_dispatcher.py
+docker compose up -d postgres
+docker compose ps
 ```
 
-Do not start duplicate API, worker, or dispatcher processes during local
-testing.
-
-## API Surface
-
-Enabled routers:
-
-- `app.api.targets`
-- `app.api.open_ports`
-- `app.routers.decisions`
-- `app.routers.llm_tools`
-- `app.routers.approval`
-
-Key routes:
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| POST | `/targets` | Create target, scan trace, and initial ToolTask |
-| GET | `/targets/{target_id}/open-ports` | List target open ports |
-| GET | `/targets/{target_id}/report` | Return structured target report |
-| GET | `/targets/{target_id}/report/export` | Export report to JSON/HTML/PDF |
-| GET | `/targets/{target_id}/report/download` | Generate and download one JSON/HTML/PDF artifact |
-| GET | `/targets/{target_id}/report/latest` | Return latest exported HTML report |
-| GET | `/targets/{target_id}/summary` | Dashboard target summary |
-| GET | `/targets/{target_id}/tool-results` | Dashboard tool results |
-| GET | `/targets/{target_id}/decisions` | Dashboard decisions |
-| GET | `/targets/{target_id}/learning-feedback` | Dashboard learning feedback |
-| GET | `/targets/{target_id}/run-status` | Runtime orchestration status |
-| GET | `/dashboard/overview` | Aggregate dashboard counters |
-| POST | `/decisions/run/{target_id}` | Run deterministic decision engine |
-| POST | `/tools/llm-propose` | Submit governed LLM tool proposal |
-| GET | `/approvals/pending` | List pending approval tasks |
-| POST | `/approvals/{task_id}/approve` | Approve ToolTask |
-| POST | `/approvals/{task_id}/reject` | Reject ToolTask |
-
-## Report Export
-
-Report export reads only `generate_target_report()` output. It does not query
-the database or recalculate risk, decisions, learning, or ranking.
-
-CLI:
+### 終端 B：M2A API
 
 ```powershell
-.\.venv\Scripts\python scripts\export_report.py --target 18 --format all
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-api.ps1 -NoReload
 ```
 
-Outputs:
+預設：
 
-```text
-reports/json/
-reports/html/
-reports/pdf/
-reports/latest/
-```
+- API：`http://127.0.0.1:8000`
+- OpenAPI：`http://127.0.0.1:8000/docs`
+- Schema：`http://127.0.0.1:8000/openapi.json`
 
-Generated reports are ignored by Git.
+若 8000 被占用，腳本可能改用 8001；UI 的 API Endpoint 也必須跟著改。
 
-The export API also returns artifact size, SHA-256, and a download URL for each
-generated format. The latest-report route is target-scoped and never falls back
-to another target's global latest report.
-
-## Tests
-
-Run the full test suite:
+### 終端 C：前端 UI
 
 ```powershell
-.\.venv\Scripts\python -m pytest tests -v
+Set-Location .\frontend
+pnpm.cmd install
+pnpm.cmd dev
 ```
 
-## Documentation
+開啟 `http://127.0.0.1:5173`。開發模式會把 `/targets`、`/dashboard`、`/decisions`、`/tools`、`/approvals` 代理到 `127.0.0.1:8000`。
 
-Architecture and research positioning:
+若 API 不在同一臺電腦：
 
-- `docs/ARCHITECTURE.md`
-- `docs/SYSTEM_WORKFLOW.md`
-- `docs/RESEARCH_POSITIONING.md`
-- `docs/LEARNING_FRAMEWORK.md`
+1. UI → Settings → API Endpoint。
+2. 填入 `http://<控制端內網IP>:8000`。
+3. API 必須明確綁定該內網 IP，並以 Firewall 只允許管理端來源。
+
+目前 API 沒有登入驗證及完整 CORS／TLS 部署層；不建議直接跨主機暴露。正式多機部署前必須加 reverse proxy、TLS、authentication、authorization 與來源限制。
+
+### 終端 D：Worker
+
+啟動前先查是否已有 pending 任務：
+
+```powershell
+docker exec m2a-postgres psql -U m2a_user -d m2a_pentest -c `
+  "SELECT id,target_id,tool_name,status,approval_status FROM tool_tasks WHERE status='pending' ORDER BY id;"
+```
+
+確認所有目標均在授權範圍後，才啟動：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-worker.ps1
+```
+
+只跑一輪：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-worker-once.ps1
+```
+
+Kali 上請在已複製 Repository、建立 `.venv`、設定可連 PostgreSQL 的 `.env` 後執行：
+
+```bash
+./.venv/bin/python -m worker.task_poller
+```
+
+若 PostgreSQL 仍只映射在 Windows localhost，Kali 無法連線。跨主機連 DB 前必須：
+
+- 使用固定內網 IP 與隔離 Lab 網段；
+- 只允許 Kali IP 連 TCP 15432；
+- 保持密碼驗證，不使用 `trust`；
+- 調整 Docker port bind／Windows Firewall／PostgreSQL access rule；
+- 不對 Internet 開放 15432。
+
+舊的 `KALI_WORKER_URL`／Remote Runner 是另一條 HTTP `/execute` 路徑，不等同目前以 `tool_tasks` 為 source of truth 的 poller。沒有明確部署 Remote Runner 時不要假設它已存在。
+
+## 6. 安全 Smoke Test
+
+不建立目標、不啟動工具的控制面檢查：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/openapi.json
+Invoke-RestMethod http://127.0.0.1:8000/dashboard/overview
+Invoke-RestMethod http://127.0.0.1:8000/approvals/pending
+```
+
+完整測試：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+Set-Location .\frontend
+pnpm.cmd build
+```
+
+只有在授權靶場已確認後，才能建立目標：
+
+```powershell
+.\scripts\post-target.ps1 -Target 192.168.56.10 -BaseUrl http://127.0.0.1:8000
+```
+
+`POST /targets` 會立即建立初始 `nmap_service` ToolTask；不要把它當成純資料輸入。若 Worker 正在運行，任務可能開始執行。
+
+## 7. 人工核准 SOP
+
+1. 開啟 UI → Approval Center，或呼叫 `GET /approvals/pending`。
+2. 核對 target、scope、tool、proposal rationale 與 policy gate rationale。
+3. 核對書面授權、時間窗、影響、停止條件與資料處理限制。
+4. 輸入不可空白的人工作決策理由。
+5. 核准或拒絕。
+
+目前 `approved_by` 仍由 UI／client 提供，不是可信身分來源。未加入 authentication／RBAC 前，不可把此介面當成生產級身分稽核。
+
+## 8. API 一覽
+
+| Method | Path | 用途 |
+|---|---|---|
+| POST | `/targets` | 建立 Target、ScanRun 與初始 ToolTask |
+| GET | `/dashboard/overview` | 控制台統計 |
+| GET | `/targets/{id}/run-status` | 任務狀態與輪次 |
+| GET | `/targets/{id}/report` | 結構化報告 |
+| GET | `/targets/{id}/report/export?format=all` | 匯出 JSON／HTML／PDF |
+| POST | `/decisions/run/{id}` | 執行確定性決策引擎 |
+| POST | `/tools/llm-propose` | 接收外部 LLM 的受治理 JSON 提案 |
+| GET | `/approvals/pending` | 待人工核准任務與上下文 |
+| POST | `/approvals/{task_id}/approve` | 核准並保存理由 |
+| POST | `/approvals/{task_id}/reject` | 拒絕並保存理由 |
+
+提案範例：
+
+```powershell
+.\scripts\propose-llm-tool.ps1 `
+  -Tool httpx_basic `
+  -Target 192.168.56.10 `
+  -Reason "確認已授權 Web 服務的基本回應" `
+  -RiskLevel low `
+  -Profile internal `
+  -TargetId 1 `
+  -BaseUrl http://127.0.0.1:8000
+```
+
+## 9. 報告
+
+```powershell
+.\.venv\Scripts\python.exe scripts\export_report.py --target 18 --format all
+```
+
+輸出位於 `reports/json/`、`reports/html/`、`reports/pdf/` 與 `reports/latest/`，不應 commit。
+
+## 10. 停止與復原
+
+API、UI、Worker：在各終端按 `Ctrl+C`。
+
+停止 PostgreSQL但保留資料：
+
+```powershell
+docker compose stop postgres
+```
+
+重新啟動：
+
+```powershell
+docker compose start postgres
+```
+
+不要執行 `docker compose down -v`，除非已確認要刪除資料庫 volume 且有備份與人工核准。
+
+## 11. 常見問題
+
+### Docker Images 有 postgres，但服務不能連
+
+Image 只代表映像存在。以 `docker compose ps` 確認 container 為 `Up`；再查 `docker logs m2a-postgres`。
+
+### PowerShell 不允許執行 `.ps1`
+
+使用單次 process-scoped bypass：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-api.ps1
+```
+
+這不會修改全機執行原則。
+
+### API 啟動但 UI 無資料
+
+- 查看 API 實際是 8000 還是 8001。
+- UI Settings 的 API Endpoint 必須一致。
+- 執行 `scripts/check-api-routes.ps1`。
+
+### Kali 連不到 PostgreSQL
+
+- Windows 的 `localhost:15432` 只供本機使用。
+- 檢查 Docker bind、Windows Firewall、Kali 到 Windows 的路由與 PostgreSQL access rule。
+- 僅允許 Kali 的固定內網 IP，不使用 `trust`，不對 Internet 開放。
+
+## 12. 證據與成熟度
+
+截至基準 commit `4e3e71f` 與其後本機文件修訂，後端自動測試為 303 passed，前端 production build 成功；本機既有 PostgreSQL 已補套 021 與 024。唯讀控制面 smoke test 成功讀取 OpenAPI、Dashboard（22 個既有 Target）及 Approval Center（1 個待核准項目）。Worker 未啟動，該待核准項目未執行。這些是程式與本機驗證證據，不等於正式 GADE 研究結果、Kali 跨主機驗證或生產安全認證。
+
+詳細資料：
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/SYSTEM_WORKFLOW.md`](docs/SYSTEM_WORKFLOW.md)
+- [`docs/CAPABILITY_AUDIT_2026-08-13.md`](docs/CAPABILITY_AUDIT_2026-08-13.md)
+- [`docs/RESEARCH_POSITIONING.md`](docs/RESEARCH_POSITIONING.md)
