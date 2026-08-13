@@ -8,7 +8,8 @@ import type {
   TargetReport,
   TargetSummary,
   ToolResult,
-  Decision
+  Decision,
+  PendingApproval
 } from "./types";
 import type { ReportExportResponse } from "./types";
 
@@ -65,7 +66,7 @@ export const api = {
   reportDownloadUrl: (targetId: number, format: "html" | "pdf" | "json") =>
     `${getApiBase()}/targets/${targetId}/report/download?format=${format}`,
   latestReportUrl: (targetId: number) => `${getApiBase()}/targets/${targetId}/report/latest`,
-  pendingApprovals: () => request<number[]>("/approvals/pending"),
+  pendingApprovals: () => request<PendingApproval[]>("/approvals/pending"),
   approveTask: (taskId: number, reason?: string) =>
     request<{ status: string; task_id: number }>(`/approvals/${taskId}/approve`, {
       method: "POST",

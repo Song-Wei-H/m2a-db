@@ -24,7 +24,7 @@ export function ApprovalDialog({
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant={action === "reject" ? "destructive" : "default"} onClick={() => onSubmit(reason)}>
+          <Button disabled={!reason.trim()} variant={action === "reject" ? "destructive" : "default"} onClick={() => onSubmit(reason.trim())}>
             Confirm
           </Button>
         </div>

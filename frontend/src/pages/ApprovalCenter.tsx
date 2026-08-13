@@ -38,17 +38,17 @@ export function ApprovalCenter() {
           {pending.isError ? <ErrorState message={pending.error.message} /> : null}
           {pending.data?.length ? (
             <Table>
-              <THead><TR><TH>Task ID</TH><TH>Status</TH><TH>Reason</TH><TH>History</TH><TH /></TR></THead>
+              <THead><TR><TH>Task ID</TH><TH>Status</TH><TH>Context</TH><TH>Rationale</TH><TH>Actions</TH></TR></THead>
               <TBody>
-                {pending.data.map((id) => (
-                  <TR key={id}>
-                    <TD className="font-mono">{id}</TD>
+                {pending.data.map((task) => (
+                  <TR key={task.task_id}>
+                    <TD className="font-mono">{task.task_id}</TD>
                     <TD>pending approval</TD>
-                    <TD className="text-muted-foreground">Disabled: endpoint returns task IDs only.</TD>
-                    <TD className="text-muted-foreground">Disabled: history endpoint not exposed.</TD>
+                    <TD><div>{task.tool_name}</div><div className="text-xs text-muted-foreground">{task.target} · {task.scope || "scope pending"}</div></TD>
+                    <TD className="text-muted-foreground"><div>{task.proposal_reason || "No proposal rationale recorded"}</div><div className="text-xs">Gate: {task.approval_reason || "No gate rationale recorded"}</div></TD>
                     <TD className="space-x-2 text-right">
-                      <Button size="sm" onClick={() => setDialog({ taskId: id, action: "approve" })}>Approve</Button>
-                      <Button size="sm" variant="destructive" onClick={() => setDialog({ taskId: id, action: "reject" })}>Reject</Button>
+                      <Button size="sm" onClick={() => setDialog({ taskId: task.task_id, action: "approve" })}>Approve</Button>
+                      <Button size="sm" variant="destructive" onClick={() => setDialog({ taskId: task.task_id, action: "reject" })}>Reject</Button>
                     </TD>
                   </TR>
                 ))}

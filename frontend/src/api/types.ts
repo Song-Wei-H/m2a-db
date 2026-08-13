@@ -142,3 +142,14 @@ export type TargetCreateResponse = {
   scan_run_id: number;
   status: string;
 };
+
+export type PendingApproval = {
+  task_id: number;
+  target_id: number;
+  target: string;
+  scope?: string | null;
+  tool_name: string;
+  proposal_reason?: string | null;
+  approval_reason?: string | null;
+  created_at: string;
+};

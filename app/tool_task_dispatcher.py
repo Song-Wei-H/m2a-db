@@ -234,6 +234,7 @@ async def dispatch_llm_tool_proposal(
         approval_required=approval_required,
         approval_status=approval_status,
         approval_reason=approval_reason,
+        proposal_reason=proposal.reason,
     )
     if not inserted:
         return DispatchResult(
