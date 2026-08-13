@@ -144,6 +144,9 @@ Get-Content -Raw .\initdb\021_tooltask_lifecycle_alignment.sql |
 
 Get-Content -Raw .\initdb\024_approval_decision_audit.sql |
   docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
+
+Get-Content -Raw .\initdb\025_normalized_results_schema_alignment.sql |
+  docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
 ```
 
 若 API 報告 `column tool_tasks.approved_at does not exist`，代表既有 volume 漏套 021；先執行 021，再執行 024。

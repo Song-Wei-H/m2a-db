@@ -57,7 +57,12 @@ async def create_tool_task_if_not_exists(
         .returning(ToolTask.id)
     )
     try:
-        inserted_id = (await session.execute(stmt)).scalar_one_or_none()
+        # PostgreSQL can reject ON CONFLICT when an older database is missing
+        # the matching partial expression index. Isolate that compatibility
+        # failure in a savepoint so the caller's outer transaction remains
+        # usable for the deterministic fallback below.
+        async with session.begin_nested():
+            inserted_id = (await session.execute(stmt)).scalar_one_or_none()
     except TypeError:
         task = ToolTask(**values)
         session.add(task)

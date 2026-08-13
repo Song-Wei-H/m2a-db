@@ -8,6 +8,7 @@ from scripts.sync_cve_intel import (
     DESCRIPTION_LIMIT,
     apply_kev_epss,
     async_main,
+    build_nvd_url,
     parse_cpe23_uri,
     parse_epss_payload,
     parse_kev_payload,
@@ -78,12 +79,19 @@ def test_kev_and_epss_payloads_update_slim_records():
     assert updated[0]["epss"] == 0.91
 
 
+def test_nvd_url_supports_keyword_search():
+    url = build_nvd_url(since=None, limit=20, keyword="nginx")
+
+    assert "resultsPerPage=20" in url
+    assert "keywordSearch=nginx" in url
+
+
 @pytest.mark.asyncio
-async def test_sync_script_external_api_failure_exits_zero_without_network():
+async def test_sync_script_external_api_failure_returns_nonzero_without_network():
     with patch("scripts.sync_cve_intel.fetch_json", side_effect=RuntimeError("network down")):
         exit_code = await async_main(["--source", "nvd", "--limit", "1"])
 
-    assert exit_code == 0
+    assert exit_code == 1
 
 
 @pytest.mark.asyncio

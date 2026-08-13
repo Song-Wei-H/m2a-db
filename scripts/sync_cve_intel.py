@@ -154,7 +154,7 @@ def fetch_json(url: str, *, timeout: float = 30.0) -> dict[str, Any]:
         return json.loads(response.read().decode("utf-8"))
 
 
-def build_nvd_url(*, since: str | None, limit: int | None) -> str:
+def build_nvd_url(*, since: str | None, limit: int | None, keyword: str | None = None) -> str:
     params: dict[str, str] = {}
     if limit:
         params["resultsPerPage"] = str(limit)
@@ -163,6 +163,8 @@ def build_nvd_url(*, since: str | None, limit: int | None) -> str:
         end = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         params["lastModStartDate"] = start
         params["lastModEndDate"] = end
+    if keyword:
+        params["keywordSearch"] = keyword
     return f"{NVD_API_URL}?{urlencode(params)}" if params else NVD_API_URL
 
 
@@ -212,8 +214,8 @@ def load_records_from_file(path: Path, *, limit: int | None = None) -> list[dict
     return parse_nvd_payload(payload, limit=limit)
 
 
-async def sync_nvd(*, since: str | None, limit: int | None, dry_run: bool) -> int:
-    nvd_payload = fetch_json(build_nvd_url(since=since, limit=limit))
+async def sync_nvd(*, since: str | None, limit: int | None, keyword: str | None, dry_run: bool) -> int:
+    nvd_payload = fetch_json(build_nvd_url(since=since, limit=limit, keyword=keyword))
     records = parse_nvd_payload(nvd_payload, limit=limit)
     try:
         kev_ids = parse_kev_payload(fetch_json(CISA_KEV_URL))
@@ -221,7 +223,9 @@ async def sync_nvd(*, since: str | None, limit: int | None, dry_run: bool) -> in
         print(f"warning: KEV sync skipped: {exc}", file=sys.stderr)
         kev_ids = set()
     try:
-        epss_scores = parse_epss_payload(fetch_json(EPSS_API_URL))
+        cve_ids = [record["cve"] for record in records]
+        epss_url = f"{EPSS_API_URL}?{urlencode({'cve': ','.join(cve_ids)})}" if cve_ids else EPSS_API_URL
+        epss_scores = parse_epss_payload(fetch_json(epss_url))
     except (OSError, URLError, json.JSONDecodeError, TimeoutError) as exc:
         print(f"warning: EPSS sync skipped: {exc}", file=sys.stderr)
         epss_scores = {}
@@ -237,6 +241,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Offline sync compact CVE intelligence into PostgreSQL.")
     parser.add_argument("--since", help="Sync CVEs modified since YYYY-MM-DD.")
     parser.add_argument("--limit", type=int, help="Maximum NVD records to fetch.")
+    parser.add_argument("--keyword", help="NVD keywordSearch value, for example nginx.")
     parser.add_argument("--source", choices=["nvd"], default="nvd")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-raw-cache", action="store_true", default=True)
@@ -251,12 +256,12 @@ async def async_main(argv: list[str] | None = None) -> int:
             records = load_records_from_file(args.sample_file, limit=args.limit)
             count = len(records) if args.dry_run else await upsert_cve_records(records)
         else:
-            count = await sync_nvd(since=args.since, limit=args.limit, dry_run=args.dry_run)
+            count = await sync_nvd(since=args.since, limit=args.limit, keyword=args.keyword, dry_run=args.dry_run)
         print(f"synced_records={count}")
         return 0
     except Exception as exc:
         print(f"error: CVE intel sync failed: {exc}", file=sys.stderr)
-        return 0
+        return 1
 
 
 def main(argv: list[str] | None = None) -> int:
