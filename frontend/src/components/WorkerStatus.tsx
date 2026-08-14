@@ -16,7 +16,7 @@ export function WorkerStatus({ status }: { status?: RunStatus }) {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <ServerCog className="h-4 w-4 text-primary" />
-          Worker Status
+          Worker 狀態
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -24,21 +24,21 @@ export function WorkerStatus({ status }: { status?: RunStatus }) {
           <div className="rounded-md border border-border bg-muted/30 p-3">
             <div className="flex items-center gap-2 text-xs uppercase text-muted-foreground">
               <Activity className="h-4 w-4 text-green-300" />
-              Active Workers
+              執行中 Worker
             </div>
             <div className="mt-1 text-2xl font-semibold">{active}</div>
           </div>
           <div className="rounded-md border border-border bg-muted/30 p-3">
             <div className="flex items-center gap-2 text-xs uppercase text-muted-foreground">
               <Cpu className="h-4 w-4 text-primary" />
-              Running Tool
+              執行中工具
             </div>
-            <div className="mt-1 truncate text-sm font-medium">{status?.latest_next_tool || "idle"}</div>
+            <div className="mt-1 truncate text-sm font-medium">{status?.latest_next_tool || "閒置"}</div>
           </div>
         </div>
         <div>
           <div className="mb-2 flex justify-between text-xs text-muted-foreground">
-            <span>Progress</span>
+            <span>進度</span>
             <span>{progress}%</span>
           </div>
           <progress

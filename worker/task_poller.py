@@ -421,6 +421,32 @@ async def poll_once() -> int:
     return len(tasks)
 
 
+async def poll_target_once(target_id: int) -> int:
+    """Process executable pending tasks for exactly one governed target."""
+    async with async_session() as db, db.begin():
+        stmt = (
+            select(ToolTask)
+            .where(
+                ToolTask.target_id == target_id,
+                ToolTask.status == PENDING,
+                ToolTask.approval_status.in_(EXECUTABLE_APPROVAL_STATUSES),
+            )
+            .order_by(ToolTask.priority.desc(), ToolTask.id)
+            .limit(10)
+            .with_for_update(skip_locked=True)
+        )
+        tasks = list((await db.execute(stmt)).scalars().all())
+    for task in tasks:
+        await execute_task(task.id)
+    return len(tasks)
+
+
+async def run_target_automation(target_id: int) -> None:
+    """Run one target until it has no immediately executable work."""
+    while await poll_target_once(target_id):
+        await asyncio.sleep(settings.worker_poll_interval_seconds)
+
+
 async def run_poller() -> None:
     logging.basicConfig(
         level=logging.INFO,

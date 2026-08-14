@@ -9,6 +9,7 @@ const severityClass: Record<string, string> = {
 
 export function SeverityBadge({ severity }: { severity?: string | null }) {
   const value = (severity || "unknown").toLowerCase();
+  const labels: Record<string, string> = { critical: "重大", high: "高", medium: "中", low: "低", unknown: "未知" };
   return (
     <span
       className={cn(
@@ -16,7 +17,7 @@ export function SeverityBadge({ severity }: { severity?: string | null }) {
         severityClass[value] ?? "border-slate-500/40 bg-slate-500/15 text-slate-200"
       )}
     >
-      {value}
+      {labels[value] || value}
     </span>
   );
 }
@@ -36,7 +37,7 @@ export function RiskBadge({ score, severity }: { score?: number | null; severity
   return (
     <span className="inline-flex items-center gap-2">
       <SeverityBadge severity={inferred} />
-      <span className="font-mono text-sm text-foreground">{score ?? "n/a"}</span>
+      <span className="font-mono text-sm text-foreground">{score ?? "無資料"}</span>
     </span>
   );
 }
@@ -44,9 +45,9 @@ export function RiskBadge({ score, severity }: { score?: number | null; severity
 export function MITREBadge({ phase, technique }: { phase?: unknown; technique?: unknown }) {
   return (
     <span className="inline-flex max-w-full items-center rounded-md border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-xs text-cyan-100">
-      <span className="truncate">{String(phase || "Unmapped")}</span>
+      <span className="truncate">{String(phase || "尚未對應")}</span>
       <span className="mx-1 text-cyan-500">/</span>
-      <span className="truncate">{String(technique || "Technique pending")}</span>
+      <span className="truncate">{String(technique || "技術待確認")}</span>
     </span>
   );
 }

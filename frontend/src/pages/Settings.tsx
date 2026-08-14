@@ -20,16 +20,16 @@ export function SettingsPage() {
   return (
     <div className="grid gap-4 xl:grid-cols-2">
       <Card>
-        <CardHeader><CardTitle>API Settings</CardTitle></CardHeader>
+        <CardHeader><CardTitle>API 設定</CardTitle></CardHeader>
         <CardContent className="space-y-4">
-          <Field label="API Endpoint">
+          <Field label="API 端點">
             <Input value={apiBase} onChange={(event) => updateApiBase(event.target.value)} placeholder="http://127.0.0.1:8000" />
           </Field>
-          <Field label="Refresh Interval">
+          <Field label="更新間隔">
             <Select value={refresh} onChange={(event) => setRefresh(event.target.value)}>
-              <option value="5000">5 seconds</option>
-              <option value="15000">15 seconds</option>
-              <option value="30000">30 seconds</option>
+              <option value="5000">5 秒</option>
+              <option value="15000">15 秒</option>
+              <option value="30000">30 秒</option>
             </Select>
           </Field>
           <Button
@@ -38,29 +38,29 @@ export function SettingsPage() {
               localStorage.setItem("m2a.refreshInterval", refresh);
               localStorage.setItem("m2a.user", user);
               localStorage.setItem("m2a.wsEndpoint", wsEndpoint);
-              notify({ title: "Settings saved", tone: "success" });
+              notify({ title: "設定已儲存", tone: "success" });
             }}
           >
-            <Save className="h-4 w-4" />Save
+            <Save className="h-4 w-4" />儲存
           </Button>
         </CardContent>
       </Card>
       <Card>
-        <CardHeader><CardTitle>Console Preferences</CardTitle></CardHeader>
+        <CardHeader><CardTitle>主控台偏好設定</CardTitle></CardHeader>
         <CardContent className="space-y-4">
-          <Field label="Theme">
+          <Field label="佈景主題">
             <Select value={theme} onChange={(event) => setTheme(event.target.value as "dark" | "light")}>
-              <option value="dark">Dark SOC</option>
-              <option value="light">Light analyst</option>
+              <option value="dark">深色 SOC</option>
+              <option value="light">淺色分析師</option>
             </Select>
           </Field>
-          <Field label="User">
+          <Field label="使用者">
             <Input value={user} onChange={(event) => setUser(event.target.value)} />
           </Field>
-          <Field label="Worker Status">
-            <Input value="Derived from /targets/{id}/run-status" disabled />
+          <Field label="Worker 狀態">
+            <Input value="由 /targets/{id}/run-status 取得" disabled />
           </Field>
-          <Field label="WebSocket Endpoint">
+          <Field label="WebSocket 端點">
             <Input value={wsEndpoint} onChange={(event) => setWsEndpoint(event.target.value)} placeholder="ws://127.0.0.1:8000/ws/targets/{targetId}" />
           </Field>
         </CardContent>

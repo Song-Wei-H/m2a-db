@@ -24,6 +24,7 @@ class FakeScalarResult:
 async def test_reject_task_writes_reject_reason_not_approval_reason():
     task = SimpleNamespace(
         id=10,
+        status="pending",
         approval_status="pending_approval",
         approval_reason="High-risk validation requires human approval",
         reject_reason=None,
@@ -39,9 +40,11 @@ async def test_reject_task_writes_reject_reason_not_approval_reason():
 
     assert response == {"status": "rejected", "task_id": 10}
     assert task.approval_reason == "High-risk validation requires human approval"
+    assert task.status == "rejected"
     assert task.reject_reason == "Out of scope"
     assert task.approved_by == "analyst"
     assert task.approval_decision_reason == "Out of scope"
+    assert task.approved_at.tzinfo is None
 
 
 @pytest.mark.asyncio
@@ -68,6 +71,7 @@ async def test_approve_task_preserves_human_decision_reason():
     assert task.approval_reason == "High-risk validation requires human approval"
     assert task.approval_decision_reason == "Authorized exercise window"
     assert task.approved_by == "lead"
+    assert task.approved_at.tzinfo is None
 
 
 class FakeRowsResult:

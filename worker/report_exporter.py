@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 
-REPORT_VERSION = "report-export-v1"
+REPORT_VERSION = "report-export-v2-zh-tw"
 REPORT_GENERATOR_VERSION = "target-report-v1"
 ExportFormat = Literal["json", "html", "pdf", "all"]
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -120,69 +120,131 @@ class ReportExporter:
     def _write_pdf(self, report: dict[str, Any], path: Path) -> None:
         try:
             from reportlab.lib import colors
-            from reportlab.lib.pagesizes import LETTER
+            from reportlab.lib.pagesizes import A4
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+            from reportlab.graphics.charts.barcharts import VerticalBarChart
+            from reportlab.graphics.shapes import Drawing, String
             from reportlab.lib.styles import getSampleStyleSheet
             from reportlab.lib.units import inch
             from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
             styles = getSampleStyleSheet()
+            pdfmetrics.registerFont(UnicodeCIDFont("MSung-Light"))
+            for style in styles.byName.values():
+                style.fontName = "MSung-Light"
             styles["BodyText"].leading = 14
             document = SimpleDocTemplate(
                 str(path),
-                pagesize=LETTER,
+                pagesize=A4,
                 rightMargin=0.55 * inch,
                 leftMargin=0.55 * inch,
                 topMargin=0.55 * inch,
                 bottomMargin=0.55 * inch,
             )
-            story = [Paragraph("M2A Security Assessment Report", styles["Title"]), Spacer(1, 12)]
+            story = [Paragraph("M2A 資安評估報告", styles["Title"]), Spacer(1, 12)]
             summary = report.get("target_summary") or {}
             risk = report.get("risk_ranking") or {}
             _append_pdf_section(
                 story,
-                "Executive Summary",
+                "執行摘要",
                 [
-                    ["Target", summary.get("target")],
-                    ["Status", summary.get("status")],
-                    ["Scope", summary.get("scope")],
-                    ["Highest severity", risk.get("highest_severity")],
-                    ["Highest risk score", risk.get("highest_risk_score")],
+                    ["目標", summary.get("target")],
+                    ["狀態", summary.get("status")],
+                    ["範圍", summary.get("scope")],
+                    ["最高嚴重度", risk.get("highest_severity")],
+                    ["最高風險分數", risk.get("highest_risk_score")],
+                ],
+                styles,
+            )
+            quantitative_metrics = report.get("quantitative_metrics") or {}
+            _append_pdf_metrics_chart(story, quantitative_metrics, styles, VerticalBarChart, Drawing, String)
+            severity_distribution = quantitative_metrics.get("severity_distribution") or []
+            tool_outcomes = quantitative_metrics.get("tool_outcomes") or {}
+            llm_metrics = quantitative_metrics.get("llm_advisory") or {}
+            _append_pdf_table(
+                story,
+                "量化指標總覽",
+                ["指標", "數值"],
+                [
+                    ["決策總數", sum(item.get("count", 0) for item in severity_distribution)],
+                    ["工具執行總數", tool_outcomes.get("total", 0)],
+                    ["工具成功數", tool_outcomes.get("successful", 0)],
+                    ["工具失敗數", tool_outcomes.get("failed", 0)],
+                    ["工具成功率", f'{tool_outcomes.get("success_rate", 0)}%'],
+                    ["LLM 建議總數", llm_metrics.get("total", 0)],
+                    ["LLM 動作一致數", llm_metrics.get("action_matches", 0)],
+                    ["LLM 動作一致率", f'{llm_metrics.get("action_match_rate", 0)}%'],
+                    ["未核准 LLM 建議", llm_metrics.get("unapproved", 0)],
                 ],
                 styles,
             )
             _append_pdf_table(
                 story,
-                "Open Ports",
-                ["IP", "Port", "Protocol", "Service", "Product"],
+                "Heretic 顧問建議比較",
+                ["決策 ID", "建議動作", "建議工具", "信心", "驗證狀態", "動作一致", "已核准", "理由"],
+                [
+                    [
+                        row.get("decision_score_id"),
+                        row.get("recommended_action"),
+                        row.get("recommended_tool"),
+                        row.get("confidence"),
+                        row.get("validator_status"),
+                        row.get("matches_deterministic_action"),
+                        row.get("approved"),
+                        row.get("reasoning"),
+                    ]
+                    for row in report.get("llm_advisory_recommendations", [])
+                ],
+                styles,
+            )
+            _append_pdf_table(
+                story,
+                "開放連接埠",
+                ["IP", "連接埠", "協定", "服務", "產品"],
                 [[row.get("ip"), row.get("port"), row.get("protocol"), row.get("service"), row.get("product")] for row in report.get("open_ports", [])],
                 styles,
             )
             _append_pdf_table(
                 story,
-                "Tool Results",
-                ["Tool", "Success", "Evidence", "Risk", "Service"],
+                "工具執行結果",
+                ["工具", "成功", "證據", "風險", "服務"],
                 [[row.get("tool_name"), row.get("success"), row.get("evidence_type"), row.get("risk_level"), row.get("service")] for row in report.get("tool_results", [])],
                 styles,
             )
             _append_pdf_table(
                 story,
-                "Decision Timeline",
-                ["Severity", "Risk", "Action", "Next tool", "Reason"],
+                "決策時間線",
+                ["嚴重度", "風險", "動作", "下一工具", "理由"],
                 [[row.get("severity"), row.get("risk_score"), row.get("next_action"), row.get("next_tool"), row.get("reason")] for row in report.get("decision_scores", [])],
                 styles,
             )
             _append_pdf_table(
                 story,
-                "CVE Candidates - Version Verification Required",
-                ["CVE", "CVSS", "Severity", "Match", "Confidence", "Affected version"],
+                "CVE 候選篩選摘要",
+                ["完整候選", "強制保留", "報告顯示", "摘要收斂", "KEV", "精確版本"],
+                [[
+                    report.get("cve_candidate_summary", {}).get("total_candidates", 0),
+                    report.get("cve_candidate_summary", {}).get("mandatory_candidates", 0),
+                    report.get("cve_candidate_summary", {}).get("selected_candidates", 0),
+                    report.get("cve_candidate_summary", {}).get("summarized_candidates", 0),
+                    report.get("cve_candidate_summary", {}).get("kev_candidates", 0),
+                    report.get("cve_candidate_summary", {}).get("exact_version_candidates", 0),
+                ]],
+                styles,
+            )
+            _append_pdf_table(
+                story,
+                "CVE 候選項目 - 需要版本驗證",
+                ["CVE", "CVSS", "證據層級", "候選狀態", "信心", "官方引用"],
                 [
                     [
                         row.get("cve_id") or row.get("cve"),
                         row.get("cvss_score") if row.get("cvss_score") is not None else row.get("cvss"),
-                        row.get("severity"),
-                        row.get("match_type"),
+                        row.get("evidence_level"),
+                        row.get("finding_status"),
                         row.get("match_confidence"),
-                        row.get("affected_version") or "Version range must be verified",
+                        "\n".join(str(ref.get("url")) for ref in row.get("evidence_references", []) if ref.get("url")),
                     ]
                     for row in report.get("matched_cves", [])
                 ],
@@ -190,15 +252,15 @@ class ReportExporter:
             )
             _append_pdf_table(
                 story,
-                "MITRE Mapping",
-                ["Phase", "Technique", "Count"],
+                "MITRE 映射",
+                ["階段", "技術", "數量"],
                 [[row.get("mitre_phase"), row.get("mitre_technique"), row.get("count")] for row in report.get("mitre_mapping", [])],
                 styles,
             )
             _append_pdf_table(
                 story,
-                "Recommendations",
-                ["Severity", "Recommendation"],
+                "建議措施",
+                ["嚴重度", "建議"],
                 [[row.get("severity"), row.get("recommendation")] for row in report.get("remediation", [])],
                 styles,
             )
@@ -213,7 +275,7 @@ def _pdf_value(value: Any) -> str:
 
 
 def _append_pdf_section(story: list[Any], title: str, rows: list[list[Any]], styles: Any) -> None:
-    _append_pdf_table(story, title, ["Field", "Value"], rows, styles)
+    _append_pdf_table(story, title, ["欄位", "值"], rows, styles)
 
 
 def _append_pdf_table(
@@ -223,7 +285,7 @@ def _append_pdf_table(
     from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
 
     story.extend([Paragraph(title, styles["Heading2"]), Spacer(1, 4)])
-    safe_rows = rows or [["No data recorded"] + [""] * (len(headers) - 1)]
+    safe_rows = rows or [["尚無資料"] + [""] * (len(headers) - 1)]
     data = [
         [Paragraph(_pdf_value(cell), styles["BodyText"]) for cell in headers],
         *[
@@ -247,6 +309,34 @@ def _append_pdf_table(
         )
     )
     story.extend([table, Spacer(1, 12)])
+
+
+def _append_pdf_metrics_chart(story: list[Any], metrics: dict[str, Any], styles: Any, chart_type: Any, drawing_type: Any, string_type: Any) -> None:
+    from reportlab.lib import colors
+    from reportlab.platypus import Spacer
+
+    distribution = metrics.get("severity_distribution") or [
+        {"label": label, "count": 0}
+        for label in ("重大", "高", "中", "低", "資訊")
+    ]
+    drawing = drawing_type(470, 220)
+    chart = chart_type()
+    chart.x = 46
+    chart.y = 38
+    chart.width = 375
+    chart.height = 140
+    chart.data = [[item.get("count", 0) for item in distribution]]
+    chart.categoryAxis.categoryNames = [item.get("label", "") for item in distribution]
+    chart.categoryAxis.labels.fontName = "MSung-Light"
+    chart.categoryAxis.labels.fontSize = 8
+    chart.valueAxis.labels.fontName = "MSung-Light"
+    chart.valueAxis.labels.fontSize = 8
+    chart.valueAxis.valueMin = 0
+    chart.valueAxis.valueStep = 1
+    chart.bars[0].fillColor = colors.HexColor("#2563EB")
+    drawing.add(string_type(46, 194, "風險嚴重度分布（決策筆數）", fontName="MSung-Light", fontSize=12))
+    drawing.add(chart)
+    story.extend([drawing, Spacer(1, 12)])
 
 
 def _target_id(report: dict[str, Any]) -> Any:
@@ -418,4 +508,3 @@ def _minimal_pdf(lines: list[str]) -> bytes:
 def _pdf_text(value: str) -> str:
     escaped = value.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)").replace("\n", "\\n")
     return f"({escaped})"
-

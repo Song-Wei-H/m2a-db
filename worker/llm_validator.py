@@ -15,6 +15,9 @@ ALLOWED_TOOLS = {
     "httpx_basic",
     "nuclei_safe",
     "dirb_safe",
+    "tls_certificate",
+    "http_security_headers",
+    "dns_metadata",
 }
 
 

@@ -21,18 +21,18 @@ export function LiveConsole() {
     ]
   });
 
-  if (!ids.length) return <EmptyState title="No target selected" message="Open or create a target first, then the live console can poll run status." />;
+  if (!ids.length) return <EmptyState title="尚未選擇目標" message="請先開啟或建立目標，即時主控台才能取得執行狀態。" />;
   const firstError = status.isError ? status.error : report.isError ? report.error : null;
 
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2"><Terminal className="h-4 w-4 text-primary" />Live Console</CardTitle>
+          <CardTitle className="flex items-center gap-2"><Terminal className="h-4 w-4 text-primary" />即時主控台</CardTitle>
         </CardHeader>
         <CardContent>
           <Select value={String(selectedId)} onChange={(event) => setSelectedId(Number(event.target.value))}>
-            {ids.map((id) => <option value={id} key={id}>Target {id}</option>)}
+            {ids.map((id) => <option value={id} key={id}>目標 {id}</option>)}
           </Select>
         </CardContent>
       </Card>
@@ -40,12 +40,12 @@ export function LiveConsole() {
       <div className="grid gap-4 xl:grid-cols-[360px_1fr]">
         <WorkerStatus status={status.data} />
         <div className="grid gap-4">
-          <EvidenceCard title="Task Queue" data={report.data?.tool_tasks ?? []} />
-          <EvidenceCard title="Running Tool" data={status.data?.latest_next_tool ?? "idle"} />
-          <EvidenceCard title="Tool Output" data={report.data?.tool_results ?? []} />
-          <EvidenceCard title="Decision Output" data={report.data?.decision_scores ?? []} />
-          <EvidenceCard title="Learning Update" data={report.data?.learning_feedback ?? []} />
-          <EvidenceCard title={`Log Stream (${realtime.status})`} data={realtime.messages.length ? realtime.messages : (report.data?.auto_loop_decisions ?? [])} />
+          <EvidenceCard title="任務佇列" data={report.data?.tool_tasks ?? []} />
+          <EvidenceCard title="執行中工具" data={status.data?.latest_next_tool ?? "閒置"} />
+          <EvidenceCard title="工具輸出" data={report.data?.tool_results ?? []} />
+          <EvidenceCard title="決策輸出" data={report.data?.decision_scores ?? []} />
+          <EvidenceCard title="學習更新" data={report.data?.learning_feedback ?? []} />
+          <EvidenceCard title={`紀錄串流（${realtime.status}）`} data={realtime.messages.length ? realtime.messages : (report.data?.auto_loop_decisions ?? [])} />
         </div>
       </div>
     </div>

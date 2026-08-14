@@ -5,13 +5,13 @@ import { Dialog } from "./ui/dialog";
 import { Input } from "./ui/input";
 
 const actions = [
-  { label: "Dashboard", path: "/" },
-  { label: "Targets", path: "/targets" },
-  { label: "Live Console", path: "/console" },
-  { label: "Decision Center", path: "/decisions" },
-  { label: "Report Center", path: "/reports" },
-  { label: "Approval Center", path: "/approvals" },
-  { label: "Settings", path: "/settings" }
+  { label: "儀表板", path: "/" },
+  { label: "測試目標", path: "/targets" },
+  { label: "即時主控台", path: "/console" },
+  { label: "決策中心", path: "/decisions" },
+  { label: "報告中心", path: "/reports" },
+  { label: "核准中心", path: "/approvals" },
+  { label: "設定", path: "/settings" }
 ];
 
 export function CommandPalette() {
@@ -41,7 +41,7 @@ export function CommandPalette() {
       <div className="space-y-3">
         <div className="relative">
           <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input autoFocus className="pl-9" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search pages and actions" />
+          <Input autoFocus className="pl-9" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜尋頁面與操作" />
         </div>
         <div className="grid gap-1">
           {matches.map((action) => (

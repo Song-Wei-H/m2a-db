@@ -6,7 +6,7 @@ $route = $script:OpenPortsPath
 Write-Host "Looking for GET $route ..."
 Write-Host ""
 
-foreach ($port in @(8000, 8001, 8002)) {
+foreach ($port in @(8000, 8001, 8002, 8003, 8004, 8005)) {
     $base = "http://127.0.0.1:$port"
     try {
         $openapi = Invoke-RestMethod -Uri "$base/openapi.json" -Method Get -TimeoutSec 2

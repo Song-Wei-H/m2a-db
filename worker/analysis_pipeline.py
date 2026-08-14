@@ -257,8 +257,29 @@ async def _existing_tool_task(
     return (await db.execute(query)).scalar_one_or_none()
 
 
-async def _generate_tasks_from_nmap_open_ports(target_id: int) -> list[dict[str, Any]]:
+async def _generate_tasks_from_nmap_open_ports(
+    target_id: int,
+    *,
+    parsed_output: dict[str, Any],
+    raw_output: str,
+    tool_result_id: int | None,
+    ctx: Any | None,
+) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
+    normalized_evidence = normalize_tool_result(
+        tool_name="nmap_service",
+        parsed_output=parsed_output,
+        raw_output=raw_output,
+        ctx=ctx,
+        tool_result_id=tool_result_id,
+    )
+    evidence_by_endpoint = {
+        (
+            item.get("details", {}).get("port"),
+            item.get("details", {}).get("protocol"),
+        ): item
+        for item in normalized_evidence
+    }
 
     async with async_session() as db, db.begin():
         target = await db.get(Target, target_id)
@@ -278,6 +299,7 @@ async def _generate_tasks_from_nmap_open_ports(target_id: int) -> list[dict[str,
         )
 
         for port in ports:
+            nmap_evidence = evidence_by_endpoint.get((port.port, port.protocol))
             score = _score_open_port(port)
 
             cve_summary = await summarize_cve_risk(
@@ -447,6 +469,18 @@ async def _generate_tasks_from_nmap_open_ports(target_id: int) -> list[dict[str,
             db.add(decision)
             await db.flush()
 
+            if nmap_evidence is not None:
+                db.add(
+                    NormalizedResult(
+                        target_id=target_id,
+                        open_port_id=port.id,
+                        tool_result_id=tool_result_id,
+                        tool_name="nmap_service",
+                        evidence_type=nmap_evidence["evidence_type"],
+                        normalized_output=nmap_evidence,
+                    )
+                )
+
             next_tool = nmap_decision_result["recommended_tool"]
 
             current_round = target.current_round or 1
@@ -564,7 +598,13 @@ async def analyze_tool_result_and_generate_task(
     """Run the deterministic analysis pipeline and generate governed tasks."""
 
     if tool_name == "nmap_service":
-        return await _generate_tasks_from_nmap_open_ports(target_id)
+        return await _generate_tasks_from_nmap_open_ports(
+            target_id,
+            parsed_output=parsed_output,
+            raw_output=raw_output,
+            tool_result_id=tool_result_id,
+            ctx=ctx,
+        )
 
     results: list[dict[str, Any]] = []
 

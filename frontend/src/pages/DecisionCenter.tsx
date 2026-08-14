@@ -23,13 +23,13 @@ export function DecisionCenter() {
       : []
   );
 
-  if (!ids.length) return <EmptyState title="No decisions loaded" message="Open target IDs to hydrate Decision Center from existing target report APIs." />;
+  if (!ids.length) return <EmptyState title="尚未載入決策" message="請先開啟目標，決策中心將從目標報告載入資料。" />;
 
   return (
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-primary" />Decision Center</CardTitle>
+          <CardTitle className="flex items-center gap-2"><BrainCircuit className="h-4 w-4 text-primary" />決策中心</CardTitle>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
           Each flow is rendered from decision score fields exposed by the backend. Extended governance fields are shown when present in report extensions.
@@ -41,14 +41,14 @@ export function DecisionCenter() {
           <div className="space-y-3" key={`${report.target_summary.target_id}-${index}`}>
             <DecisionCard decision={decision} index={index} />
             <div className="grid gap-3 xl:grid-cols-3">
-              <EvidenceCard title="Decision Trace" data={decision} />
-              <EvidenceCard title="Learning Prior" data={report.learning_ranking_summary ?? report.learning_feedback_summary} />
-              <EvidenceCard title="UCB Score / Governance Result" data={report.round_value_summary ?? report.auto_loop_decisions} />
+              <EvidenceCard title="決策軌跡" data={decision} />
+              <EvidenceCard title="先驗學習" data={report.learning_ranking_summary ?? report.learning_feedback_summary} />
+              <EvidenceCard title="UCB 分數／治理結果" data={report.round_value_summary ?? report.auto_loop_decisions} />
             </div>
           </div>
         ))
       ) : (
-        <EmptyState title="No decision records" message="The loaded reports do not contain decision_scores yet." />
+        <EmptyState title="尚無決策紀錄" message="已載入的報告目前沒有決策分數。" />
       )}
     </div>
   );

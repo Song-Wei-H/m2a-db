@@ -17,11 +17,22 @@ class Settings(BaseSettings):
     worker_poll_interval_seconds: int = 10
     worker_tool_timeout_seconds: int = 300
     dirb_wordlist: str = "/usr/share/dirb/wordlists/common.txt"
+    enforce_target_scope: bool = False
     allowed_scopes: str = "192.0.2.0/24,203.0.113.0/24"
     allowed_hostnames: str = ""
     allowed_domain_suffixes: str = ""
     allowed_llm_profiles: str = "internal"
     allowed_tools: str = default_allowed_tools_value()
+    llm_base_url: str = "http://10.56.67.11/v1"
+    llm_model: str = "openai/qwen3-4b-thinking-2507-heretic"
+    llm_api_key: str | None = None
+    llm_send_auth: bool = False
+    llm_timeout_seconds: float = 60.0
+    llm_context_max_history: int = 3
+    cve_local_index_path: str = "data/cve_index.sqlite3"
+    cve_local_index_enabled: bool = False
+    cve_query_safety_limit: int = 5000
+    cve_report_candidate_budget: int = 50
 
     @property
     def allowed_scopes_list(self) -> list[str]:

@@ -1,160 +1,34 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
-  <title>M2A Security Assessment Report - Target {{ report.target_summary.target_id }}</title>
+  <title>M2A 資安評估報告 - 目標 {{ report.target_summary.target_id }}</title>
   <style>
-    body { font-family: Arial, sans-serif; color: #17202a; margin: 0; background: #f6f8fb; }
-    header { background: #16213e; color: white; padding: 32px 40px; }
-    main { padding: 28px 40px; }
-    section { background: white; border: 1px solid #dce3eb; border-radius: 6px; margin: 0 0 20px; padding: 20px; }
-    h1, h2 { margin: 0 0 12px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-    th, td { border-bottom: 1px solid #e5eaf0; padding: 8px; text-align: left; vertical-align: top; }
-    th { background: #eef3f8; font-size: 13px; }
-    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-    .metric { background: #f8fafc; border: 1px solid #e5eaf0; border-radius: 6px; padding: 12px; }
-    .badge { border-radius: 999px; display: inline-block; padding: 3px 9px; font-size: 12px; font-weight: 700; }
-    .critical { background: #7f1d1d; color: white; }
-    .high { background: #b91c1c; color: white; }
-    .medium { background: #b45309; color: white; }
-    .low { background: #0369a1; color: white; }
-    .info { background: #475569; color: white; }
-    .timeline { border-left: 3px solid #94a3b8; margin-left: 8px; padding-left: 16px; }
-    .timeline-item { margin: 0 0 14px; }
-    details { margin-top: 12px; }
-    pre { background: #0f172a; color: #e2e8f0; overflow: auto; padding: 12px; border-radius: 6px; }
+    :root { --ink:#172033; --navy:#0f2746; --blue:#2563eb; --line:#dbe3ef; --paper:#f4f7fb; }
+    * { box-sizing:border-box; } body { margin:0; background:var(--paper); color:var(--ink); font-family:"Microsoft JhengHei","Noto Sans TC",Arial,sans-serif; line-height:1.5; }
+    header { background:linear-gradient(120deg,#0f2746,#1e4f7b); color:#fff; padding:34px 6vw; } main { max-width:1320px; margin:0 auto; padding:26px; }
+    section { background:#fff; border:1px solid var(--line); border-radius:10px; margin-bottom:18px; padding:20px; box-shadow:0 2px 8px #0f27460b; } h1,h2,h3 { margin:0 0 12px; } h1 { font-size:28px; } h2 { font-size:20px; color:var(--navy); }
+    .muted { color:#506176; } .grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; } .metric { padding:13px; border:1px solid var(--line); border-radius:8px; background:#f8fbff; } .metric strong { color:#52657e; font-size:13px; } .metric .number { display:block; margin-top:4px; font-size:24px; font-weight:700; }
+    .charts { display:grid; grid-template-columns:2fr 1fr; gap:20px; align-items:start; } .chart-card { border:1px solid var(--line); border-radius:8px; padding:14px; } .bar-row { display:grid; grid-template-columns:52px 1fr 58px; gap:10px; align-items:center; margin:9px 0; font-size:13px; } .bar-track { height:20px; border-radius:5px; background:#e8eef7; overflow:hidden; } .bar { height:100%; min-width:2px; border-radius:5px; } .donut-note { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; } .mini { padding:10px; border-radius:6px; background:#f5f8fc; } .mini b { display:block; font-size:20px; }
+    table { width:100%; border-collapse:collapse; margin-top:10px; font-size:14px; } th,td { border-bottom:1px solid var(--line); padding:8px; text-align:left; vertical-align:top; } th { background:#eef4fa; color:#29425f; } .badge { display:inline-block; padding:3px 9px; border-radius:999px; font-size:12px; font-weight:700; color:white; } .critical {background:#991b1b}.high {background:#dc2626}.medium {background:#d97706}.low {background:#0284c7}.info {background:#64748b}
+    .timeline { border-left:3px solid #94a3b8; padding-left:16px; } .timeline-item { margin:0 0 14px; } details { margin-top:12px; } pre { overflow:auto; padding:12px; border-radius:6px; background:#0b172a; color:#dce6f3; }
+    @media(max-width:800px){ .grid {grid-template-columns:repeat(2,1fr)} .charts{grid-template-columns:1fr} main{padding:14px} header{padding:24px} table{font-size:12px} }
   </style>
 </head>
 <body>
-  <header>
-    <h1>M2A Security Assessment Report</h1>
-    <p>Target {{ report.target_summary.target }} | Status {{ report.target_summary.status }} | Generated {{ report.report_metadata.generated_at }}</p>
-  </header>
+  <header><h1>M2A 資安評估報告</h1><p>目標 {{ report.target_summary.target }} | 狀態 {{ report.target_summary.status }} | 產生時間 {{ report.report_metadata.generated_at }}</p></header>
   <main>
-    <section>
-      <h2>Executive Summary</h2>
-      <div class="grid">
-        <div class="metric"><strong>Target ID</strong><br>{{ report.target_summary.target_id }}</div>
-        <div class="metric"><strong>Open Ports</strong><br>{{ report.target_summary.open_port_count }}</div>
-        <div class="metric"><strong>Tool Results</strong><br>{{ report.target_summary.tool_result_count }}</div>
-        <div class="metric"><strong>Highest Risk</strong><br>{{ report.risk_ranking.highest_risk_score }}</div>
-      </div>
-    </section>
-
-    <section>
-      <h2>Target Summary</h2>
-      <table>
-        <tr><th>Target</th><td>{{ report.target_summary.target }}</td></tr>
-        <tr><th>Type</th><td>{{ report.target_summary.target_type }}</td></tr>
-        <tr><th>Scope</th><td>{{ report.target_summary.scope }}</td></tr>
-        <tr><th>Round</th><td>{{ report.target_summary.current_round }} / {{ report.target_summary.max_rounds }}</td></tr>
-      </table>
-    </section>
-
-    <section>
-      <h2>Open Ports</h2>
-      <table>
-        <thead><tr><th>IP</th><th>Port</th><th>Protocol</th><th>Service</th><th>Product</th><th>Version</th><th>State</th></tr></thead>
-        <tbody>
-        {% for port in report.open_ports %}
-          <tr><td>{{ port.ip }}</td><td>{{ port.port }}</td><td>{{ port.protocol }}</td><td>{{ port.service }}</td><td>{{ port.product }}</td><td>{{ port.version }}</td><td>{{ port.state }}</td></tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </section>
-
-    <section>
-      <h2>Tool Results</h2>
-      <table>
-        <thead><tr><th>Tool</th><th>Success</th><th>Service</th><th>Evidence</th><th>Risk</th><th>Created</th></tr></thead>
-        <tbody>
-        {% for result in report.tool_results %}
-          <tr><td>{{ result.tool_name }}</td><td>{{ result.success }}</td><td>{{ result.service }}</td><td>{{ result.evidence_type }}</td><td>{{ result.risk_level }}</td><td>{{ result.created_at }}</td></tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </section>
-
-    <section>
-      <h2>Decision Timeline</h2>
-      <div class="timeline">
-      {% for decision in report.decision_scores %}
-        <div class="timeline-item">
-          <span class="badge {{ decision.severity or 'info' }}">{{ decision.severity or 'info' }}</span>
-          <strong>{{ decision.next_action }}</strong>
-          {% if decision.next_tool %}-> {{ decision.next_tool }}{% endif %}
-          <br>Risk {{ decision.risk_score }} | Confidence {{ decision.confidence }}
-          <br>{{ decision.reason }}
-        </div>
-      {% endfor %}
-      </div>
-    </section>
-
-    <section>
-      <h2>Risk Summary</h2>
-      <p>Highest severity: <span class="badge {{ report.risk_ranking.highest_severity or 'info' }}">{{ report.risk_ranking.highest_severity }}</span></p>
-      <table>
-        <thead><tr><th>Action</th><th>Tool</th><th>Severity</th><th>Reason</th></tr></thead>
-        <tbody>
-        {% for action in report.risk_ranking.recommended_next_actions %}
-          <tr><td>{{ action.next_action }}</td><td>{{ action.next_tool }}</td><td>{{ action.severity }}</td><td>{{ action.reason }}</td></tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </section>
-
-    <section>
-      <h2>MITRE Mapping</h2>
-      <table>
-        <thead><tr><th>Phase</th><th>Technique</th><th>Count</th></tr></thead>
-        <tbody>
-        {% for mapping in report.mitre_mapping %}
-          <tr><td>{{ mapping.mitre_phase }}</td><td>{{ mapping.mitre_technique }}</td><td>{{ mapping.count }}</td></tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </section>
-
-    <section>
-      <h2>Learning Summary</h2>
-      <table>
-        <thead><tr><th>Tool</th><th>Service</th><th>Success Rate</th><th>Average Score</th></tr></thead>
-        <tbody>
-        {% for item in report.learning_summary %}
-          <tr><td>{{ item.tool_name }}</td><td>{{ item.service }}</td><td>{{ item.success_rate }}</td><td>{{ item.avg_learning_score }}</td></tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </section>
-
-    <section>
-      <h2>Round Summary</h2>
-      <table>
-        <thead><tr><th>Decision</th><th>Round</th><th>Tool</th><th>Round Value</th><th>Label Version</th></tr></thead>
-        <tbody>
-        {% for round in report.round_value_summary %}
-          <tr><td>{{ round.decision_score_id }}</td><td>{{ round.round }}</td><td>{{ round.tool_name }}</td><td>{{ round.round_value }}</td><td>{{ round.label_version }}</td></tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </section>
-
-    <section>
-      <h2>Recommendation</h2>
-      <table>
-        <thead><tr><th>Severity</th><th>Recommendation</th><th>Flags</th></tr></thead>
-        <tbody>
-        {% for item in report.remediation %}
-          <tr><td><span class="badge {{ item.severity or 'info' }}">{{ item.severity }}</span></td><td>{{ item.recommendation }}</td><td>remediation={{ item.requires_remediation }} followup={{ item.requires_followup }} stop={{ item.no_further_action }}</td></tr>
-        {% endfor %}
-        </tbody>
-      </table>
-      <details>
-        <summary>Report Metadata</summary>
-        <pre>{{ report.report_metadata | tojson(indent=2) }}</pre>
-      </details>
-    </section>
+    <section><h2>執行摘要</h2><div class="grid">
+      <div class="metric"><strong>目標 ID</strong><span class="number">{{ report.target_summary.target_id }}</span></div><div class="metric"><strong>開放連接埠</strong><span class="number">{{ report.target_summary.open_port_count }}</span></div><div class="metric"><strong>工具結果</strong><span class="number">{{ report.target_summary.tool_result_count }}</span></div><div class="metric"><strong>決策筆數</strong><span class="number">{{ report.target_summary.decision_count }}</span></div><div class="metric"><strong>最高風險</strong><span class="number">{{ report.risk_ranking.highest_risk_score }}</span></div>
+    </div></section>
+    <section><h2>量化風險與執行圖表</h2><div class="charts"><div class="chart-card"><h3>決策嚴重度分布</h3>{% for item in report.quantitative_metrics.severity_distribution %}<div class="bar-row"><span>{{ item.label }}</span><div class="bar-track"><div class="bar" style="width:{{ item.percentage }}%;background:{{ item.color }}"></div></div><span>{{ item.count }}（{{ item.percentage }}%）</span></div>{% endfor %}</div><div class="chart-card"><h3>執行與模型建議</h3><div class="donut-note"><div class="mini">工具成功率<b>{{ report.quantitative_metrics.tool_outcomes.success_rate }}%</b></div><div class="mini">工具失敗<b>{{ report.quantitative_metrics.tool_outcomes.failed }}</b></div><div class="mini">LLM 動作一致率<b>{{ report.quantitative_metrics.llm_advisory.action_match_rate }}%</b></div><div class="mini">未核准 LLM 建議<b>{{ report.quantitative_metrics.llm_advisory.unapproved }}</b></div></div></div></div></section>
+    <section><h2>Heretic 顧問建議比較</h2><p class="muted">模型輸出僅供建議；必須通過 JSON 驗證、工具白名單與人工核准後，才可能建立工作項目。</p><table><thead><tr><th>決策 ID</th><th>建議動作</th><th>建議工具</th><th>信心</th><th>驗證狀態</th><th>與確定性決策一致</th><th>已核准</th></tr></thead><tbody>{% for item in report.llm_advisory_recommendations %}<tr><td>{{ item.decision_score_id }}</td><td>{{ item.recommended_action }}</td><td>{{ item.recommended_tool }}</td><td>{{ item.confidence }}</td><td>{{ item.validator_status }}</td><td>動作：{{ item.matches_deterministic_action }}<br>工具：{{ item.matches_deterministic_tool }}</td><td>{{ item.approved }}</td></tr>{% else %}<tr><td colspan="7">尚無 LLM 顧問建議。</td></tr>{% endfor %}</tbody></table></section>
+    <section><h2>目標摘要</h2><table><tr><th>目標</th><td>{{ report.target_summary.target }}</td></tr><tr><th>類型</th><td>{{ report.target_summary.target_type }}</td></tr><tr><th>授權範圍</th><td>{{ report.target_summary.scope }}</td></tr><tr><th>輪次</th><td>{{ report.target_summary.current_round }} / {{ report.target_summary.max_rounds }}</td></tr></table></section>
+    <section><h2>開放連接埠</h2><table><thead><tr><th>IP</th><th>連接埠</th><th>協定</th><th>服務</th><th>產品</th><th>版本</th><th>狀態</th></tr></thead><tbody>{% for port in report.open_ports %}<tr><td>{{ port.ip }}</td><td>{{ port.port }}</td><td>{{ port.protocol }}</td><td>{{ port.service }}</td><td>{{ port.product }}</td><td>{{ port.version }}</td><td>{{ port.state }}</td></tr>{% else %}<tr><td colspan="7">未發現開放連接埠。</td></tr>{% endfor %}</tbody></table></section>
+    <section><h2>工具執行結果</h2><table><thead><tr><th>工具</th><th>成功</th><th>服務</th><th>證據類型</th><th>風險</th><th>建立時間</th></tr></thead><tbody>{% for result in report.tool_results %}<tr><td>{{ result.tool_name }}</td><td>{{ result.success }}</td><td>{{ result.service }}</td><td>{{ result.evidence_type }}</td><td>{{ result.risk_level }}</td><td>{{ result.created_at }}</td></tr>{% else %}<tr><td colspan="6">尚無工具結果。</td></tr>{% endfor %}</tbody></table></section>
+    <section><h2>決策時間線</h2><div class="timeline">{% for decision in report.decision_scores %}<div class="timeline-item"><span class="badge {{ decision.severity or 'info' }}">{{ decision.severity or 'info' }}</span> <strong>{{ decision.next_action }}</strong>{% if decision.next_tool %} → {{ decision.next_tool }}{% endif %}<br>風險 {{ decision.risk_score }} | 信心 {{ decision.confidence }}<br>{{ decision.reason }}</div>{% else %}<p>尚無決策紀錄。</p>{% endfor %}</div></section>
+    <section><h2>CVE 候選項目與證據引用</h2><p class="muted">HIGH_PRIORITY_CANDIDATE 不等於 CONFIRMED_VULNERABLE；引用分別支持 CVE、CVSS、EPSS 或 KEV 主張。</p><table><thead><tr><th>CVE</th><th>分級</th><th>比對證據</th><th>受影響版本</th><th>引用</th></tr></thead><tbody>{% for cve in report.matched_cves %}<tr><td>{{ cve.cve_id or cve.cve }}<br>CVSS {{ cve.cvss_score or cve.cvss }} / EPSS {{ cve.epss or 'n/a' }}</td><td>{{ cve.evidence_level }}<br>{{ cve.finding_status }}<br>{{ cve.validation_status }}</td><td>{{ cve.match_type }}（{{ cve.match_confidence }}）<br>{{ cve.match_reason }}<br><span class="muted">{{ cve.evidence_notice }}</span></td><td>{{ cve.affected_version or '需要驗證版本範圍' }}</td><td>{% for ref in cve.evidence_references %}<a href="{{ ref.url }}">{{ ref.authority }}</a><br><span class="muted">支持：{{ ref.supports }}</span><br>{% endfor %}</td></tr>{% else %}<tr><td colspan="5">本機同步的情資來源未比對到 CVE 候選項目。</td></tr>{% endfor %}</tbody></table></section>
+    <section><h2>建議措施</h2><table><thead><tr><th>嚴重度</th><th>建議</th><th>旗標</th></tr></thead><tbody>{% for item in report.remediation %}<tr><td><span class="badge {{ item.severity or 'info' }}">{{ item.severity }}</span></td><td>{{ item.recommendation }}</td><td>修補={{ item.requires_remediation }}；後續驗證={{ item.requires_followup }}；停止={{ item.no_further_action }}</td></tr>{% else %}<tr><td colspan="3">尚無建議措施。</td></tr>{% endfor %}</tbody></table><details><summary>報告中繼資料</summary><pre>{{ report.report_metadata | tojson(indent=2) }}</pre></details></section>
   </main>
 </body>
 </html>

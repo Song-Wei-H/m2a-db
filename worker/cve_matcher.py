@@ -7,6 +7,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import CveEnrichment, PortCveMatch, TargetCveMatch
+from app.config import settings
+from worker.cve_local_index import LocalCveCandidate, query_local_candidates
 
 
 @dataclass(frozen=True)
@@ -119,6 +121,18 @@ def _candidate_version(value: Any) -> str | None:
 
 
 async def _candidate_rows(session: AsyncSession, evidence: CpeEvidence) -> list[CveEnrichment]:
+    local_rows = (
+        query_local_candidates(
+            settings.cve_local_index_path,
+            evidence.product,
+            evidence.version,
+            settings.cve_query_safety_limit,
+        )
+        if settings.cve_local_index_enabled and isinstance(session, AsyncSession)
+        else None
+    )
+    if local_rows:
+        return local_rows  # type: ignore[return-value]
     query = select(CveEnrichment).where(
         func.lower(CveEnrichment.affected_product) == evidence.product,
     )
@@ -130,7 +144,13 @@ async def _candidate_rows(session: AsyncSession, evidence: CpeEvidence) -> list[
             | (CveEnrichment.affected_version == "")
             | (CveEnrichment.affected_version == "*")
         )
-    result = await session.execute(query.order_by(CveEnrichment.cve))
+    query = query.order_by(
+        CveEnrichment.kev.desc(),
+        CveEnrichment.cvss_score.desc().nullslast(),
+        CveEnrichment.epss.desc().nullslast(),
+        CveEnrichment.cve,
+    ).limit(settings.cve_query_safety_limit)
+    result = await session.execute(query)
     return list(result.scalars().all())
 
 
@@ -200,10 +220,11 @@ async def match_cves_for_target(
             cve_id = candidate.cve
             cvss_score = candidate.cvss_score if candidate.cvss_score is not None else candidate.cvss
             affected_version = _candidate_version(candidate.affected_version)
+            lookup_source = "local SQLite CVE index" if isinstance(candidate, LocalCveCandidate) else "PostgreSQL cve_enrichment"
             match_reason = (
-                "Exact product and version match from local cve_enrichment."
+                f"Exact product and version match from {lookup_source}."
                 if match_type == "exact_cpe_version"
-                else "Product-only candidate from local cve_enrichment; version unknown, confidence capped."
+                else f"Product-only candidate from {lookup_source}; version unknown, confidence capped."
             )
             row_data = {
                 "target_id": target_id,

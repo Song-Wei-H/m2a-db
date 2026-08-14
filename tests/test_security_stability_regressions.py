@@ -112,6 +112,7 @@ def test_allowed_tool_sources_are_consistent(monkeypatch):
 
 
 def test_hostname_scope_allowlist_and_denylist(monkeypatch):
+    monkeypatch.setattr(settings, "enforce_target_scope", True)
     monkeypatch.setattr(settings, "allowed_hostnames", "app.example.test")
     monkeypatch.setattr(settings, "allowed_domain_suffixes", "internal.example")
 
@@ -123,9 +124,19 @@ def test_hostname_scope_allowlist_and_denylist(monkeypatch):
 
 
 def test_ip_scope_still_uses_cidr(monkeypatch):
+    monkeypatch.setattr(settings, "enforce_target_scope", True)
     monkeypatch.setattr(settings, "allowed_scopes", "192.0.2.0/24")
     monkeypatch.setattr(settings, "allowed_hostnames", "")
     monkeypatch.setattr(settings, "allowed_domain_suffixes", "")
 
     assert target_in_allowed_scope("192.0.2.42") is True
     assert target_in_allowed_scope("198.51.100.42") is False
+
+
+def test_external_network_control_mode_accepts_valid_targets(monkeypatch):
+    monkeypatch.setattr(settings, "enforce_target_scope", False)
+    monkeypatch.setattr(settings, "allowed_scopes", "10.56.67.13/32")
+
+    assert target_in_allowed_scope("10.56.67.11") is True
+    assert target_in_allowed_scope("scan.internal.example") is True
+    assert target_in_allowed_scope("bad target;whoami") is False

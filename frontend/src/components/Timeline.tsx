@@ -6,7 +6,7 @@ export function Timeline({
 }: {
   items: Array<{ title: string; time?: string | null; detail?: string | null }>;
 }) {
-  if (!items.length) return <p className="text-sm text-muted-foreground">No timeline events returned by the API.</p>;
+  if (!items.length) return <p className="text-sm text-muted-foreground">API 尚未回傳時間軸事件。</p>;
   return (
     <ol className="space-y-3">
       {items.map((item, index) => (

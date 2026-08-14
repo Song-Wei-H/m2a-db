@@ -13,6 +13,9 @@ CANONICAL_ALLOWED_TOOLS = frozenset(
         "dirb_safe",
         "ssh-enum",
         "mysql-info",
+        "tls_certificate",
+        "http_security_headers",
+        "dns_metadata",
     }
 )
 
@@ -22,6 +25,9 @@ SAFE_DISCOVERY_TOOLS = frozenset(
         "httpx_basic",
         "ssh-enum",
         "mysql-info",
+        "tls_certificate",
+        "http_security_headers",
+        "dns_metadata",
     }
 )
 
@@ -51,6 +57,7 @@ MITRE_ALLOWED_TOOL_IDS = frozenset(
 
 MITRE_DISCOVERY_TOOL_IDS = frozenset({"httpx", "ssh-enum", "mysql-info"})
 MITRE_DEPTH_TOOL_IDS = frozenset({"nuclei", "dirb"})
+
 
 
 def default_allowed_tools_value() -> str:

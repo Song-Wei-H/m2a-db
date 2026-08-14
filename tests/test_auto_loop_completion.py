@@ -90,6 +90,34 @@ async def test_httpx_basic_completed_on_http_service_creates_nuclei_safe():
 
 
 @pytest.mark.asyncio
+async def test_suppressed_http_followup_stops_without_creating_dirb_task():
+    session = MagicMock()
+    session.get = AsyncMock(side_effect=[target(), target()])
+    session.execute = AsyncMock(return_value=FakeScalarResult(None))
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    session.begin = MagicMock(return_value=FakeAsyncSessionContext(session))
+
+    with patch("worker.auto_loop.async_session", return_value=FakeAsyncSessionContext(session)), patch(
+        "worker.auto_loop.generate_tool_task", new_callable=AsyncMock
+    ) as mock_generate:
+        result = await get_next_tool_task(
+            18,
+            17,
+            {
+                "recommended_tool": None,
+                "recommended_action": "stop",
+                "decision_score_id": 58,
+                "suppress_http_followup": True,
+            },
+        )
+
+    assert result["action"] == "stop"
+    assert result["target_completed"] is True
+    assert mock_generate.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_target_not_completed_after_httpx_when_nuclei_missing():
     session = MagicMock()
     session.get = AsyncMock(side_effect=[target(), port()])

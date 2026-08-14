@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from sqlalchemy import text
+from sqlalchemy import select
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -209,6 +210,35 @@ async def upsert_cve_records(records: list[dict[str, Any]]) -> int:
     return len(records)
 
 
+async def rebuild_local_index_from_postgres(path: str | Path | None = None) -> int:
+    """Publish a complete, versioned SQLite read-model from PostgreSQL authority."""
+    from app.config import settings
+    from app.database import async_session
+    from app.models import CveEnrichment
+    from worker.cve_local_index import rebuild_local_index
+
+    async with async_session() as session:
+        rows = list((await session.execute(select(CveEnrichment).order_by(CveEnrichment.cve))).scalars().all())
+    records = [
+        {
+            "cve": row.cve,
+            "cvss": row.cvss,
+            "cvss_score": row.cvss_score,
+            "severity": row.severity,
+            "epss": row.epss,
+            "kev": row.kev,
+            "affected_vendor": row.affected_vendor,
+            "affected_product": row.affected_product,
+            "affected_version": row.affected_version,
+            "source": row.source,
+            "last_synced_at": row.last_synced_at,
+        }
+        for row in rows
+    ]
+    dataset_version = _now().isoformat(timespec="seconds") + "Z"
+    return rebuild_local_index(records, path or settings.cve_local_index_path, dataset_version)
+
+
 def load_records_from_file(path: Path, *, limit: int | None = None) -> list[dict[str, Any]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     return parse_nvd_payload(payload, limit=limit)
@@ -246,18 +276,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-raw-cache", action="store_true", default=True)
     parser.add_argument("--sample-file", type=Path, help="Load an NVD-like JSON fixture instead of calling external APIs.")
+    parser.add_argument("--rebuild-local-index", action="store_true", help="Rebuild SQLite read-model from PostgreSQL without external sync.")
+    parser.add_argument("--skip-local-index", action="store_true", help="Do not rebuild the local SQLite read-model after sync.")
     return parser.parse_args(argv)
 
 
 async def async_main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        if args.rebuild_local_index:
+            count = await rebuild_local_index_from_postgres()
+            print(f"indexed_records={count}")
+            return 0
         if args.sample_file:
             records = load_records_from_file(args.sample_file, limit=args.limit)
             count = len(records) if args.dry_run else await upsert_cve_records(records)
         else:
             count = await sync_nvd(since=args.since, limit=args.limit, keyword=args.keyword, dry_run=args.dry_run)
         print(f"synced_records={count}")
+        if not args.dry_run and not args.skip_local_index:
+            indexed = await rebuild_local_index_from_postgres()
+            print(f"indexed_records={indexed}")
         return 0
     except Exception as exc:
         print(f"error: CVE intel sync failed: {exc}", file=sys.stderr)

@@ -192,14 +192,15 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
         [
             FakeScalarResult([open_port]),
             FakeScalarResult([tool_result]),
-            FakeScalarResult([tool_task]),
-            FakeScalarResult([decision_score]),
-            FakeScalarResult([evidence_confidence]),
+                FakeScalarResult([tool_task]),
+                FakeScalarResult([decision_score]),
+                FakeScalarResult([evidence_confidence]),
             FakeScalarResult([normalized_result]),
             FakeScalarResult([auto_loop_decision]),
-            FakeScalarResult([learning_feedback]),
-            FakeScalarResult([cve_match]),
-            FakeScalarResult([]),
+                FakeScalarResult([learning_feedback]),
+                FakeScalarResult([cve_match]),
+                FakeScalarResult([]),
+                FakeScalarResult([]),
         ],
     )
 
@@ -207,7 +208,7 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
         report = await generate_target_report(1)
 
     session.get.assert_awaited_once()
-    assert session.execute.await_count == 10
+    assert session.execute.await_count == 11
     assert report["target"] is report["target_summary"]
     assert report["target_summary"]["target_id"] == 1
     assert report["target_summary"]["open_port_count"] == 1
@@ -217,6 +218,10 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
     assert report["open_ports"][0]["matched_cves"][0]["cve"] == "CVE-2024-NGINX-0001"
     assert report["open_ports"][0]["matched_cves"][0]["cvss_score"] == 8.8
     assert report["open_ports"][0]["matched_cves"][0]["match_reason"].startswith("Exact product")
+    assert report["open_ports"][0]["matched_cves"][0]["evidence_level"] == "TECHNICAL_ANALYSIS"
+    assert report["open_ports"][0]["matched_cves"][0]["finding_status"] == "HIGH_PRIORITY_CANDIDATE"
+    assert [ref["authority"] for ref in report["open_ports"][0]["matched_cves"][0]["evidence_references"]] == ["NIST NVD", "CVE Program", "FIRST EPSS"]
+    assert report["open_ports"][0]["matched_cves"][0]["evidence_references"][0]["url"].endswith("CVE-2024-NGINX-0001")
     assert report["tool_results"][0]["tool_name"] == "httpx"
     assert report["tool_tasks"][0]["tool_run"] == "run-1"
     assert report["decision_scores"][0]["risk_score"] == 8.5
@@ -350,11 +355,12 @@ async def test_completed_target_recommended_actions_use_latest_final_stop_only()
     session = make_session(
         make_target(),
         [
-            FakeScalarResult([]),
-            FakeScalarResult([]),
-            FakeScalarResult([]),
-            FakeScalarResult([historical_continue, final_stop]),
-            FakeScalarResult([]),
+                FakeScalarResult([]),
+                FakeScalarResult([]),
+                FakeScalarResult([]),
+                FakeScalarResult([historical_continue, final_stop]),
+                FakeScalarResult([]),
+                FakeScalarResult([]),
             FakeScalarResult([]),
             FakeScalarResult([]),
             FakeScalarResult([]),
@@ -439,11 +445,12 @@ async def test_report_remediation_flags_follow_next_action():
     session = make_session(
         make_target(),
         [
-            FakeScalarResult([]),
-            FakeScalarResult([]),
-            FakeScalarResult([]),
-            FakeScalarResult(decisions),
-            FakeScalarResult([]),
+                FakeScalarResult([]),
+                FakeScalarResult([]),
+                FakeScalarResult([]),
+                FakeScalarResult(decisions),
+                FakeScalarResult([]),
+                FakeScalarResult([]),
             FakeScalarResult([]),
             FakeScalarResult([]),
             FakeScalarResult([]),

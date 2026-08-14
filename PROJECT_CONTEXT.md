@@ -15,6 +15,14 @@ system.
 
 ## Current Runtime Architecture
 
+### Governed remote evidence collectors (2026-08-14)
+
+M2A and Kali Worker independently allowlist `tls_certificate`,
+`http_security_headers`, and `dns_metadata`. `GET /workers/preflight` must return
+`READY` before use. Target reachability is governed by deployment NDR and
+microsegmentation rather than a Worker CIDR list. Tool allowlisting, fixed
+handlers, timeouts and M2A approval gates remain enforced.
+
 ```text
 Target
 -> ScanRun trace
@@ -75,6 +83,10 @@ from `scan_runs`.
 - Learning framework, offline knowledge prior, adaptive ranking metadata,
   training dataset pipeline, round labeling, and offline model training
   framework exist as advisory/offline components.
+- The optional advisory LLM decision runner builds a minimal local context from
+  the current decision evidence and bounded prior advisory outcomes. The model
+  receives only that serialized context, never direct database or filesystem
+  access, and its response cannot bypass validation or approval gates.
 
 ## Current API Surface
 

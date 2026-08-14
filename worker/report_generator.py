@@ -11,6 +11,7 @@ from app.models import (
     DecisionScore,
     EvidenceConfidence,
     LearningFeedback,
+    LlmRecommendation,
     NormalizedResult,
     OpenPort,
     PortCveMatch,
@@ -19,6 +20,8 @@ from app.models import (
     ToolResult,
     ToolTask,
 )
+from app.config import settings
+from worker.cve_prioritizer import prioritize_cve_candidates
 
 __all__ = ["generate_target_report"]
 
@@ -30,6 +33,106 @@ def _risk_score(value: float | None) -> float:
 def _severity_rank(severity: str | None) -> int:
     ranks = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
     return ranks.get((severity or "").lower(), 0)
+
+
+def _cve_evidence_metadata(match: Any, cve_id: str, affected_version: str | None) -> dict[str, Any]:
+    """Build claim-scoped references without promoting a candidate to a finding."""
+    references = [
+        {
+            "authority": "NIST NVD",
+            "url": f"https://nvd.nist.gov/vuln/detail/{cve_id}",
+            "supports": "CVE description, CVSS and affected-product records",
+        },
+        {
+            "authority": "CVE Program",
+            "url": f"https://www.cve.org/CVERecord?id={cve_id}",
+            "supports": "Canonical CVE identity and CNA record",
+        },
+    ]
+    if getattr(match, "epss", None) is not None:
+        references.append(
+            {
+                "authority": "FIRST EPSS",
+                "url": f"https://api.first.org/data/v1/epss?cve={cve_id}",
+                "supports": "EPSS probability value",
+            }
+        )
+    if bool(getattr(match, "kev", False)):
+        references.append(
+            {
+                "authority": "CISA KEV",
+                "url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog",
+                "supports": "Known Exploited Vulnerabilities catalog membership",
+            }
+        )
+    created_at = getattr(match, "created_at", None)
+    return {
+        "evidence_level": "TECHNICAL_ANALYSIS" if affected_version else "SOURCE_CLAIM",
+        "finding_status": "HIGH_PRIORITY_CANDIDATE",
+        "validation_status": "OBSERVED" if affected_version else "NOT_TESTED",
+        "target_evidence": {
+            "open_port_id": getattr(match, "open_port_id", None),
+            "observed_product": getattr(match, "product", None),
+            "observed_version": getattr(match, "version", None),
+            "match_type": getattr(match, "match_type", None),
+            "match_reason": getattr(match, "match_reason", None),
+            "matched_at": created_at.isoformat() if hasattr(created_at, "isoformat") else created_at,
+        },
+        "evidence_references": references,
+        "evidence_notice": (
+            "已觀察到產品與版本證據；仍需授權的目標驗證才能確認漏洞可利用性。"
+            if affected_version
+            else "僅為產品層級候選；版本未知，不代表目標已確認存在漏洞。"
+        ),
+    }
+
+
+def _quantitative_metrics(
+    decisions: Iterable[DecisionScore],
+    tool_results: Iterable[ToolResult],
+    recommendations: Iterable[LlmRecommendation],
+) -> dict[str, Any]:
+    decision_rows = list(decisions)
+    result_rows = list(tool_results)
+    recommendation_rows = list(recommendations)
+    severity_labels = [
+        ("critical", "重大", "#991b1b"),
+        ("high", "高", "#dc2626"),
+        ("medium", "中", "#d97706"),
+        ("low", "低", "#0284c7"),
+        ("info", "資訊", "#64748b"),
+    ]
+    total_decisions = len(decision_rows)
+    severity_distribution = []
+    for severity, label, color in severity_labels:
+        count = sum((row.severity or "").lower() == severity for row in decision_rows)
+        severity_distribution.append(
+            {
+                "severity": severity,
+                "label": label,
+                "count": count,
+                "percentage": round((count / total_decisions * 100) if total_decisions else 0, 1),
+                "color": color,
+            }
+        )
+    successful = sum(row.success is True for row in result_rows)
+    failed = sum(row.success is False for row in result_rows)
+    advisory_action_matches = sum(row["matches_deterministic_action"] is True for row in recommendation_rows)
+    return {
+        "severity_distribution": severity_distribution,
+        "tool_outcomes": {
+            "total": len(result_rows),
+            "successful": successful,
+            "failed": failed,
+            "success_rate": round((successful / len(result_rows) * 100) if result_rows else 0, 1),
+        },
+        "llm_advisory": {
+            "total": len(recommendation_rows),
+            "action_matches": advisory_action_matches,
+            "action_match_rate": round((advisory_action_matches / len(recommendation_rows) * 100) if recommendation_rows else 0, 1),
+            "unapproved": sum(row["approved"] is not True for row in recommendation_rows),
+        },
+    }
 
 
 def _decision_created_at(decision: DecisionScore) -> Any:
@@ -369,6 +472,14 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             )
         ).scalars().all()
 
+        llm_recommendations = (
+            await session.execute(
+                select(LlmRecommendation)
+                .where(LlmRecommendation.target_id == target_id)
+                .order_by(LlmRecommendation.created_at.desc())
+            )
+        ).scalars().all()
+
         target_cve_matches = (
             await session.execute(
                 select(TargetCveMatch)
@@ -404,6 +515,7 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
                 "match_confidence": match.match_confidence,
                 "match_reason": getattr(match, "match_reason", None),
                 "source": match.source,
+                **_cve_evidence_metadata(match, cve_value, affected_version),
             }
             matched_cves.append(item)
             cves_by_port.setdefault(match.open_port_id, []).append(item)
@@ -412,6 +524,7 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             cvss_score = getattr(match, "cvss_score", None)
             if cvss_score is None:
                 cvss_score = match.cvss
+            affected_version = getattr(match, "affected_version", None) or match.version
             matched_cves.append(
                 {
                     "cve": cve_value,
@@ -425,13 +538,23 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
                     "epss": match.epss,
                     "kev": match.kev,
                     "affected_product": getattr(match, "affected_product", None) or match.product,
-                    "affected_version": getattr(match, "affected_version", None) or match.version,
+                    "affected_version": affected_version,
                     "match_type": match.match_type,
                     "match_confidence": match.match_confidence,
                     "match_reason": getattr(match, "match_reason", None),
                     "source": match.source,
+                    **_cve_evidence_metadata(match, cve_value, affected_version),
                 }
             )
+        prioritized_cves, cve_candidate_summary = prioritize_cve_candidates(
+            matched_cves,
+            display_budget=settings.cve_report_candidate_budget,
+        )
+        selected_cve_ids = {str(item.get("cve_id") or item.get("cve")) for item in prioritized_cves}
+        cves_by_port = {
+            port_id: [item for item in items if str(item.get("cve_id") or item.get("cve")) in selected_cve_ids]
+            for port_id, items in cves_by_port.items()
+        }
         decisions_by_risk = sorted(
             decision_scores,
             key=lambda decision: (_risk_score(decision.risk_score), _severity_rank(decision.severity)),
@@ -594,6 +717,34 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             }
             for decision in decisions_by_risk
         ]
+        decision_by_id = {decision.id: decision for decision in decision_scores}
+        llm_advisory_recommendations = [
+            {
+                "recommendation_id": recommendation.id,
+                "decision_score_id": recommendation.decision_score_id,
+                "recommended_action": recommendation.recommended_action,
+                "recommended_tool": recommendation.recommended_tool,
+                "confidence": recommendation.confidence,
+                "reasoning": recommendation.reasoning,
+                "validator_status": recommendation.validator_status,
+                "validator_reason": recommendation.validator_reason,
+                "approved": recommendation.approved,
+                "matches_deterministic_action": (
+                    decision_by_id[recommendation.decision_score_id].next_action
+                    == recommendation.recommended_action
+                    if recommendation.decision_score_id in decision_by_id
+                    else None
+                ),
+                "matches_deterministic_tool": (
+                    decision_by_id[recommendation.decision_score_id].next_tool
+                    == recommendation.recommended_tool
+                    if recommendation.decision_score_id in decision_by_id
+                    else None
+                ),
+                "created_at": recommendation.created_at,
+            }
+            for recommendation in llm_recommendations
+        ]
 
         mitre_mapping = []
         seen_mitre = set()
@@ -694,6 +845,11 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
         learning_summary = _learning_context_summary(learning_feedback)
         learning_ranking_summary = _learning_ranking_summary(decision_scores)
         round_value_summary = _round_value_summary(decision_scores)
+        quantitative_metrics = _quantitative_metrics(
+            decisions_by_risk,
+            tool_results,
+            llm_advisory_recommendations,
+        )
 
         return {
             "target_summary": target_summary,
@@ -703,6 +859,7 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             "tool_tasks": tool_tasks_data,
             "normalized_results": normalized_results_data,
             "decision_scores": decision_scores_data,
+            "llm_advisory_recommendations": llm_advisory_recommendations,
             "mitre_mapping": mitre_mapping,
             "risk_ranking": risk_ranking,
             "remediation": remediation,
@@ -715,5 +872,7 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             "learning_ranking_summary": learning_ranking_summary,
             "round_value_summary": round_value_summary,
             "learning_tool_score": learning_tool_score,
-            "matched_cves": matched_cves,
+            "matched_cves": prioritized_cves,
+            "cve_candidate_summary": cve_candidate_summary,
+            "quantitative_metrics": quantitative_metrics,
         }

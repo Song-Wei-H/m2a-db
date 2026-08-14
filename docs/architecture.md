@@ -8,6 +8,13 @@ data, and exposes reports and dashboard APIs.
 
 ## Subsystems
 
+### Dual-gate evidence tools
+
+Remote evidence collection requires agreement across the M2A canonical/config/database
+allowlists and the Kali Worker `/health` declaration. Target reachability is delegated
+to the deployment NDR and microsegmentation boundary. Results flow through deterministic
+parsers into normalized evidence.
+
 ```text
 Execution
   -> Governance
@@ -95,6 +102,20 @@ The analysis pipeline transforms parser output into normalized evidence,
 confidence records, risk scores, and `DecisionScore` rows. Decisions can
 recommend follow-up tools, stop execution, or require approval, but tool
 creation still goes through the governed ToolTask path.
+
+### Advisory LLM decision runner
+
+`worker/llm_decision.py` can request an advisory recommendation from the
+configured OpenAI-compatible LiteLLM endpoint. Before the request, M2A builds
+`minimal-decision-context-v1` locally from the current `DecisionScore`, its
+bounded CVE/evidence snapshot, and at most the configured number of prior
+advisory outcomes. The model receives that serialized context only; it has no
+database, filesystem, OpenCode, or Obsidian access.
+
+The response must pass the JSON validator and tool allowlist. A recommendation
+is persisted for audit and still requires the existing approval path before a
+ToolTask can be created. This optional runner does not replace the deterministic
+decision engine or alter the ToolTask lifecycle.
 
 ## Learning Subsystem
 
@@ -186,3 +207,20 @@ Not implemented as runtime capabilities:
 - autonomous credential attacks
 - phishing or payload delivery
 - model-driven governance bypass
+# CVE evidence-reference contract
+
+Every `matched_cves` report item includes claim-scoped provenance generated from its canonical CVE ID:
+
+- `evidence_level`: `SOURCE_CLAIM` when target version is unknown; `TECHNICAL_ANALYSIS` when product/version applicability was observed.
+- `finding_status`: remains `HIGH_PRIORITY_CANDIDATE`; a match is never automatically promoted to a confirmed vulnerability.
+- `validation_status`: `NOT_TESTED` or `OBSERVED`.
+- `target_evidence`: observed product/version, port reference, match type/reason and match timestamp.
+- `evidence_references`: official NIST NVD and CVE Program URLs, plus FIRST EPSS when a score exists and CISA KEV when membership is asserted. Each reference declares the claim it supports.
+
+The report API, web UI, HTML export and PDF export consume the same contract. References are generated at report time, so historical matches gain citations without database mutation or a new scan.
+
+## Local CVE query acceleration
+
+`cve_enrichment` in PostgreSQL is authoritative. `worker/cve_local_index.py` publishes a compact SQLite read-model through temporary-file creation followed by atomic replacement. Every SQLite connection is explicitly closed before replacement for Windows compatibility.
+
+Worker lookup uses an mtime-versioned process-local LRU and a high `CVE_QUERY_SAFETY_LIMIT` guard against corrupted/unbounded datasets. Missing/corrupt/empty local results fall back to the equivalently bounded PostgreSQL query. Report selection is a separate stage: all KEV and exact-version candidates are mandatory, high-confidence critical/high-EPSS candidates are mandatory, and lower-confidence product-only rows are risk-ranked into `CVE_REPORT_CANDIDATE_BUDGET`. Counts and exclusion totals remain visible. The LLM context receives summarized decision features, never the complete dataset.

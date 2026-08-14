@@ -106,6 +106,7 @@ export type TargetReport = {
   learning_feedback: LearningFeedback[];
   remediation: Array<Record<string, unknown>>;
   matched_cves: Array<Record<string, unknown>>;
+  cve_candidate_summary?: Record<string, unknown>;
   tool_tasks: Array<Record<string, unknown>>;
   normalized_results: Array<Record<string, unknown>>;
   remediation_guidance: string[];
@@ -152,4 +153,11 @@ export type PendingApproval = {
   proposal_reason?: string | null;
   approval_reason?: string | null;
   created_at: string;
+};
+
+export type AutomationStatus = {
+  target_id: number;
+  status: "started" | "retest_started" | "already_running" | "running" | "stopped";
+  preflight?: "READY";
+  tool_task_id?: number;
 };

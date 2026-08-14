@@ -2,9 +2,11 @@
 param(
     [int]$Port = 8000,
     [int]$FallbackPort = 8001,
+    [int[]]$DiscoveryPorts = @(8000, 8001, 8002, 8003, 8004, 8005),
     [string]$HostAddress = "127.0.0.1",
     [switch]$NoFallback,
-    [switch]$NoReload
+    [switch]$NoReload,
+    [switch]$AllowAdditionalInstance
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,6 +22,39 @@ function Get-ListenPids([int]$TargetPort) {
         }
     }
     $pids | Select-Object -Unique
+}
+
+function Get-CompatibleM2AInstances {
+    $instances = @()
+    foreach ($candidate in $DiscoveryPorts) {
+        try {
+            $base = "http://${HostAddress}:$candidate"
+            $schema = Invoke-RestMethod "$base/openapi.json" -TimeoutSec 2
+            $paths = $schema.paths.PSObject.Properties.Name
+            if ($schema.info.title -eq "M2A Pentest API" -and
+                $paths -contains "/workers/preflight" -and
+                $paths -contains "/automation/targets/{target_id}/retest") {
+                $instances += [pscustomobject]@{
+                    Port = $candidate
+                    BaseUrl = $base
+                    Pids = @((Get-ListenPids -TargetPort $candidate))
+                }
+            }
+        } catch {
+            # Not a compatible M2A API on this bounded port.
+        }
+    }
+    return @($instances)
+}
+
+if (-not $AllowAdditionalInstance) {
+    $existing = @(Get-CompatibleM2AInstances)
+    if ($existing.Count -gt 0) {
+        $description = ($existing | ForEach-Object { "$($_.BaseUrl) (PID $($_.Pids -join ','))" }) -join "; "
+        Write-Host "Compatible M2A API already running: $description"
+        Write-Host "Reusing the existing singleton. No additional API was started."
+        exit 0
+    }
 }
 
 $listenPids = Get-ListenPids -TargetPort $Port

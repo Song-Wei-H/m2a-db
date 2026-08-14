@@ -15,6 +15,7 @@ env/
 postgres_data/
 *.log
 *.sqlite
+*.sqlite3
 *.db
 *.dump
 *.bak

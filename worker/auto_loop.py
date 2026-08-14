@@ -27,7 +27,10 @@ from worker.report_lifecycle import ReportLifecycleManager
 
 logger = logging.getLogger(__name__)
 
-DISCOVERY_TOOLS = {"nmap_service", "httpx_basic", "ssh-enum", "mysql-info"}
+DISCOVERY_TOOLS = {
+    "nmap_service", "httpx_basic", "ssh-enum", "mysql-info",
+    "tls_certificate", "http_security_headers", "dns_metadata",
+}
 DEPTH_TOOLS = {"nuclei_safe", "dirb_safe"}
 HTTP_FOLLOWUP_TOOLS = ("nuclei_safe", "dirb_safe")
 
@@ -367,6 +370,7 @@ async def finalize_target_if_idle(
     *,
     session=None,
     stop_reason: str | None = None,
+    suppress_http_followup: bool = False,
 ) -> bool:
     """Mark target completed when no pending/running ToolTask remains."""
     if session is None:
@@ -375,6 +379,7 @@ async def finalize_target_if_idle(
                 target_id,
                 session=owned_session,
                 stop_reason=stop_reason,
+                suppress_http_followup=suppress_http_followup,
             )
 
     if await target_has_active_tasks(session, target_id):
@@ -386,7 +391,11 @@ async def finalize_target_if_idle(
 
     current_round = target.current_round or 1
     max_round = target.max_round or 5
-    if current_round < max_round and await target_has_missing_http_followups(session, target):
+    if (
+        not suppress_http_followup
+        and current_round < max_round
+        and await target_has_missing_http_followups(session, target)
+    ):
         logger.info("target_id=%s not completed: pending HTTP follow-up tools remain", target_id)
         return False
 
@@ -441,11 +450,15 @@ async def get_next_tool_task(target_id: int, open_port_id: int | None, decision_
             target_status=target.status,
         )
 
-        if should_stop and stop_reason in {
+        if (
+            not decision_result.get("suppress_http_followup", False)
+            and should_stop
+            and stop_reason in {
             STOP_REASONS["no_next_tool"],
             STOP_REASONS["stop_action"],
             STOP_REASONS["duplicate_tool"],
-        }:
+            }
+        ):
             followup_decision = await _http_followup_candidate(
                 session,
                 target=target,
@@ -471,6 +484,7 @@ async def get_next_tool_task(target_id: int, open_port_id: int | None, decision_
                     target_id,
                     session=session,
                     stop_reason=reason,
+                    suppress_http_followup=bool(decision_result.get("suppress_http_followup")),
                 )
                 if completed:
                     _schedule_report_export(target_id)
@@ -495,6 +509,7 @@ async def get_next_tool_task(target_id: int, open_port_id: int | None, decision_
                 target_id,
                 session=session,
                 stop_reason=reason,
+                suppress_http_followup=bool(decision_result.get("suppress_http_followup")),
             )
             if completed:
                 _schedule_report_export(target_id)

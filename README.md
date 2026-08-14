@@ -94,8 +94,7 @@ POSTGRES_PASSWORD=請使用本機專用強密碼
 DATABASE_URL=postgresql+asyncpg://m2a_user:同一密碼@localhost:15432/m2a_pentest
 
 # 僅填入實際獲授權的內網／Lab 範圍
-ALLOWED_SCOPES=192.168.56.0/24
-ALLOWED_TOOLS=nmap_service,httpx_basic,nuclei_safe,dirb_safe,ssh-enum,mysql-info
+ALLOWED_TOOLS=nmap_service,httpx_basic,nuclei_safe,dirb_safe,ssh-enum,mysql-info,tls_certificate,http_security_headers,dns_metadata
 ALLOWED_LLM_PROFILES=internal
 ```
 
@@ -104,7 +103,7 @@ ALLOWED_LLM_PROFILES=internal
 - `.env` 不得 commit、貼入 Issue、Notion 或聊天。
 - `POSTGRES_PASSWORD` 與 `DATABASE_URL` 中的密碼必須一致。
 - 如果密碼含 `@`、`:`、`/` 等字元，需作 URL encoding。
-- `ALLOWED_SCOPES` 必須先由人確認授權，不可用 `0.0.0.0/0`。
+- Kali Worker 不維護目標 CIDR；可達範圍由部署環境的 NDR、微分段與網路 ACL 控制。Worker 仍只接受固定 allowlist 工具，M2A 仍執行核准與任務治理。
 
 ### 4.3 API Key 要加在哪裡
 
@@ -190,10 +189,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-api.ps1 
 ```powershell
 Set-Location .\frontend
 pnpm.cmd install
-pnpm.cmd dev
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ..\scripts\start-ui.ps1
 ```
 
-開啟 `http://127.0.0.1:5173`。開發模式會把 `/targets`、`/dashboard`、`/decisions`、`/tools`、`/approvals` 代理到 `127.0.0.1:8000`。
+啟動器會自動尋找包含目前必要路由的 M2A API，忽略仍在監聽但版本過舊的程序，並顯示實際 UI URL。開發模式會將 API 路由代理到偵測出的相容 API，而不是假定固定使用 8000。
 
 若 API 不在同一臺電腦：
 
@@ -368,3 +367,33 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-api.ps1
 - [`docs/SYSTEM_WORKFLOW.md`](docs/SYSTEM_WORKFLOW.md)
 - [`docs/CAPABILITY_AUDIT_2026-08-13.md`](docs/CAPABILITY_AUDIT_2026-08-13.md)
 - [`docs/RESEARCH_POSITIONING.md`](docs/RESEARCH_POSITIONING.md)
+# Deployment target-scope mode
+
+When target authorization is enforced externally by NDR and microsegmentation, use `ENFORCE_TARGET_SCOPE=false`. M2A will accept syntactically valid IP addresses and hostnames while retaining tool and approval controls. Set it to `true` to enforce `ALLOWED_SCOPES`, `ALLOWED_HOSTNAMES`, and `ALLOWED_DOMAIN_SUFFIXES` locally. Restart M2A processes after changing this setting.
+
+Use `scripts/start-api.ps1` as the normal API entry point. It enforces one compatible M2A API instance by default. The UI launcher also fails closed if multiple compatible APIs are detected, preventing stale runtime configuration from consuming tasks.
+
+## CVE evidence citations
+
+CVE matches are reported as governed candidates with official claim-level references. M2A links the NVD and CVE Program record for identity/CVSS context, FIRST EPSS when an EPSS value is present, and CISA KEV when KEV membership is asserted. Product-only matching remains `SOURCE_CLAIM / HIGH_PRIORITY_CANDIDATE / NOT_TESTED`; it is not a confirmed target vulnerability.
+
+In Report Center, `下載 HTML`, `下載 PDF`, `下載 JSON`, and `全部下載` first generate verified server artifacts and then immediately hand the resulting files to the browser download manager. Server copies remain under `reports/` for lifecycle and integrity tracking.
+
+## Local CVE read-model
+
+M2A can use a rebuildable SQLite CVE index plus an in-process LRU cache without running Valkey:
+
+```env
+CVE_LOCAL_INDEX_ENABLED=true
+CVE_LOCAL_INDEX_PATH=data/cve_index.sqlite3
+CVE_QUERY_SAFETY_LIMIT=5000
+CVE_REPORT_CANDIDATE_BUDGET=50
+```
+
+Rebuild it from PostgreSQL authority without external network access:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\sync_cve_intel.py --rebuild-local-index
+```
+
+Normal CVE synchronization rebuilds the index automatically unless `--skip-local-index` is supplied. Lookup order is SQLite/LRU first and PostgreSQL fallback on missing, empty, disabled, or unreadable local state. The index is disposable and excluded from Git; PostgreSQL remains the evidence/provenance authority. The query safety limit is not a report Top-N rule: all mandatory KEV/exact-version/high-confidence critical/high-EPSS candidates survive, while lower-confidence product-only candidates are risk-ranked and summarized to the report budget.

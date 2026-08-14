@@ -50,7 +50,7 @@ export function TargetsPage() {
     onSuccess: (result) => {
       knownTargets.add(result.target_id);
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-      notify({ title: "Target created", message: `Target ${result.target_id} queued for scanning.`, tone: "success" });
+      notify({ title: "目標已建立", message: `目標 ${result.target_id} 已排入測試佇列。`, tone: "success" });
       navigate(`/targets/${result.target_id}`);
     }
   });
@@ -73,24 +73,24 @@ export function TargetsPage() {
       <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
         <Card>
           <CardHeader>
-            <CardTitle>Targets</CardTitle>
+            <CardTitle>測試目標</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-3 md:grid-cols-[1fr_160px_160px]">
               <div className="relative">
                 <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input className="pl-9" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search targets" />
+                <Input className="pl-9" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜尋目標" />
               </div>
               <Select value={status} onChange={(event) => setStatus(event.target.value)}>
-                <option value="all">All statuses</option>
-                <option value="pending">Pending</option>
-                <option value="running">Running</option>
-                <option value="completed">Completed</option>
-                <option value="failed">Failed</option>
+                <option value="all">全部狀態</option>
+                <option value="pending">等待中</option>
+                <option value="running">執行中</option>
+                <option value="completed">已完成</option>
+                <option value="failed">失敗</option>
               </Select>
               <Button variant="outline" onClick={() => setSort(sort === "risk" ? "target" : sort === "target" ? "round" : "risk")}>
                 <ArrowDownUp className="h-4 w-4" />
-                Sort {sort}
+                排序：{sort === "risk" ? "風險" : sort === "target" ? "目標" : "輪次"}
               </Button>
             </div>
             {isLoading ? <Loading /> : null}
@@ -99,13 +99,13 @@ export function TargetsPage() {
               <Table>
                 <THead>
                   <TR>
-                    <TH>Target</TH>
-                    <TH>Scope</TH>
-                    <TH>Status</TH>
-                    <TH>Current Round</TH>
-                    <TH>Risk</TH>
-                    <TH>Current Tool</TH>
-                    <TH>Created</TH>
+                    <TH>目標</TH>
+                    <TH>範圍</TH>
+                    <TH>狀態</TH>
+                    <TH>目前輪次</TH>
+                    <TH>風險</TH>
+                    <TH>目前工具</TH>
+                    <TH>建立時間</TH>
                     <TH />
                   </TR>
                 </THead>
@@ -122,20 +122,20 @@ export function TargetsPage() {
                 </TBody>
               </Table>
             ) : (
-              <EmptyState title="No targets loaded" message="Use a target ID lookup or create a target through POST /targets." />
+              <EmptyState title="尚未載入目標" message="使用目標 ID 開啟既有目標，或建立新目標。" />
             )}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Target Controls</CardTitle>
+            <CardTitle>目標操作</CardTitle>
           </CardHeader>
           <CardContent className="space-y-5">
             <div className="space-y-2">
-              <div className="section-title">Open Existing Target</div>
+              <div className="section-title">開啟既有目標</div>
               <div className="flex gap-2">
-                <Input value={lookupId} onChange={(event) => setLookupId(event.target.value)} placeholder="Target ID" />
+                <Input value={lookupId} onChange={(event) => setLookupId(event.target.value)} placeholder="目標 ID" />
                 <Button
                   onClick={() => {
                     const id = Number(lookupId);
@@ -145,27 +145,27 @@ export function TargetsPage() {
                     }
                   }}
                 >
-                  Open
+                  開啟
                 </Button>
               </div>
             </div>
             <div className="space-y-2">
-              <div className="section-title">Create Target</div>
+              <div className="section-title">建立目標</div>
               <Input value={newTarget.target} onChange={(event) => setNewTarget({ ...newTarget, target: event.target.value })} placeholder="192.0.2.10" />
               <div className="grid grid-cols-2 gap-2">
                 <Select value={newTarget.target_type} onChange={(event) => setNewTarget({ ...newTarget, target_type: event.target.value as "ip" | "domain" | "cidr" })}>
                   <option value="ip">IP</option>
-                  <option value="domain">Domain</option>
+                  <option value="domain">網域</option>
                   <option value="cidr">CIDR</option>
                 </Select>
                 <Select value={newTarget.scope} onChange={(event) => setNewTarget({ ...newTarget, scope: event.target.value as "internal" | "external" })}>
-                  <option value="internal">Internal</option>
-                  <option value="external">External</option>
+                  <option value="internal">內部</option>
+                  <option value="external">外部</option>
                 </Select>
               </div>
               <Button className="w-full" disabled={!newTarget.target || createTarget.isPending} onClick={() => createTarget.mutate(newTarget)}>
                 <Plus className="h-4 w-4" />
-                Create
+                建立
               </Button>
               {createTarget.isError ? <p className="text-sm text-red-300">{createTarget.error.message}</p> : null}
             </div>
@@ -194,19 +194,27 @@ function TargetRow({
           {target.target || `Target ${target.target_id}`}
         </Link>
       </TD>
-      <TD>{target.scope || "n/a"}</TD>
-      <TD>{target.status || "n/a"}</TD>
+      <TD>{formatScope(target.scope)}</TD>
+      <TD>{formatStatus(target.status)}</TD>
       <TD>{target.current_round ?? "n/a"}</TD>
       <TD>
         <RiskBadge score={target.highest_risk_score} severity={target.highest_severity} />
       </TD>
-      <TD>{runStatus?.latest_next_tool || runStatus?.latest_next_action || "idle"}</TD>
-      <TD className="text-muted-foreground">Disabled: no created-at endpoint</TD>
+      <TD>{runStatus?.latest_next_tool || runStatus?.latest_next_action || "閒置"}</TD>
+      <TD className="text-muted-foreground">後端未提供建立時間</TD>
       <TD>
-        <Button variant="ghost" size="icon" onClick={onRemove} aria-label="Remove target from local list">
+        <Button variant="ghost" size="icon" onClick={onRemove} aria-label="從本機清單移除目標">
           <Trash2 className="h-4 w-4" />
         </Button>
       </TD>
     </TR>
   );
+}
+
+function formatStatus(status?: string | null) {
+  return ({ pending: "等待中", running: "執行中", completed: "已完成", failed: "失敗" } as Record<string, string>)[String(status)] || status || "無資料";
+}
+
+function formatScope(scope?: string | null) {
+  return ({ internal: "內部", external: "外部" } as Record<string, string>)[String(scope)] || scope || "無資料";
 }

@@ -9,7 +9,8 @@ import type {
   TargetSummary,
   ToolResult,
   Decision,
-  PendingApproval
+  PendingApproval,
+  AutomationStatus
 } from "./types";
 import type { ReportExportResponse } from "./types";
 
@@ -48,6 +49,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  targetAutomationStatus: (targetId: number) => request<AutomationStatus>(`/automation/targets/${targetId}/status`),
+  startTargetAutomation: (targetId: number) => request<AutomationStatus>(`/automation/targets/${targetId}/start`, { method: "POST" }),
+  retestTarget: (targetId: number, reason: string) => request<AutomationStatus>(`/automation/targets/${targetId}/retest`, {
+    method: "POST",
+    body: JSON.stringify({ reason })
+  }),
   dashboardOverview: () => request<DashboardOverview>("/dashboard/overview"),
   createTarget: (payload: TargetCreatePayload) =>
     request<TargetCreateResponse>("/targets", { method: "POST", body: JSON.stringify(payload) }),

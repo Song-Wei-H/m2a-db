@@ -95,7 +95,7 @@ async def download_target_report(target_id: int, format: str = "pdf"):
 @router.get("/targets/{target_id}/report/latest", response_class=HTMLResponse)
 async def get_latest_target_report_html(target_id: int):
     """Return the latest exported HTML report for demo/development use."""
-    path = Path("reports/html") / f"target_{target_id}.html"
+    path = ReportExporter().output_dir / "html" / f"target_{target_id}.html"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Latest report not found")
     return HTMLResponse(path.read_text(encoding="utf-8"))

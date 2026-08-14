@@ -10,22 +10,22 @@ export function DecisionCard({ decision, index }: { decision: Decision; index: n
       <CardContent className="pt-4">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="text-xs uppercase text-muted-foreground">Decision #{index + 1}</div>
-            <div className="mt-1 text-base font-semibold">{decision.next_action || "Action pending"}</div>
+            <div className="text-xs uppercase text-muted-foreground">決策 #{index + 1}</div>
+            <div className="mt-1 text-base font-semibold">{decision.next_action || "等待決策"}</div>
           </div>
           <RiskBadge score={decision.risk_score} severity={decision.severity} />
         </div>
         <div className="grid gap-3 lg:grid-cols-5">
-          <FlowNode icon={BrainCircuit} label="Evidence" value={decision.reason || "Evidence pending"} />
-          <FlowNode icon={Gauge} label="Confidence" value={formatPercent(decision.confidence)} />
-          <FlowNode icon={ShieldCheck} label="Governance" value={decision.next_action || "pending"} />
-          <FlowNode icon={CheckCircle2} label="Selected Tool" value={decision.next_tool || "stop"} />
-          <FlowNode icon={Ban} label="Rejected Tools" value="Disabled: endpoint not exposed" />
+          <FlowNode icon={BrainCircuit} label="證據" value={decision.reason || "等待證據"} />
+          <FlowNode icon={Gauge} label="信心度" value={formatPercent(decision.confidence)} />
+          <FlowNode icon={ShieldCheck} label="治理結果" value={decision.next_action || "等待中"} />
+          <FlowNode icon={CheckCircle2} label="選定工具" value={decision.next_tool || "停止"} />
+          <FlowNode icon={Ban} label="未採用工具" value="已停用：端點未開放" />
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           <MITREBadge phase={decision.mitre_phase} technique={decision.mitre_technique} />
           <span className="rounded-md border border-border bg-muted/30 px-2 py-1 text-xs text-muted-foreground">
-            Learning prior and UCB trace use report extension fields when the backend returns them.
+            當後端提供擴充欄位時，此處會顯示先驗學習與 UCB 決策軌跡。
           </span>
         </div>
       </CardContent>

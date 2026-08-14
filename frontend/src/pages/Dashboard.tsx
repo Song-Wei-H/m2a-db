@@ -65,15 +65,15 @@ export function Dashboard() {
 
   if (overview.isLoading) return <Loading />;
   if (overview.isError) return <ErrorState message={overview.error.message} />;
-  if (!overview.data) return <EmptyState title="Dashboard unavailable" message="The backend did not return dashboard overview data." />;
+  if (!overview.data) return <EmptyState title="儀表板無法使用" message="後端沒有回傳儀表板摘要資料。" />;
 
   const data = overview.data;
   const pending = Math.max(data.targets_total - data.targets_completed - data.targets_running - data.targets_failed, 0);
   const severityData = [
-    { name: "Critical", value: data.critical_findings },
-    { name: "High", value: data.high_findings },
-    { name: "Medium", value: data.medium_findings },
-    { name: "CVE-backed", value: data.cve_backed_findings }
+    { name: "重大", value: data.critical_findings },
+    { name: "高", value: data.high_findings },
+    { name: "中", value: data.medium_findings },
+    { name: "具 CVE 證據", value: data.cve_backed_findings }
   ];
   const riskTrend = targets.map((target, index) => ({
     name: target.target || `T-${target.target_id}`,
@@ -93,48 +93,48 @@ export function Dashboard() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-          <p className="text-sm text-muted-foreground">Live governed assessment posture from FastAPI endpoints.</p>
+          <h1 className="text-2xl font-semibold tracking-tight">儀表板</h1>
+          <p className="text-sm text-muted-foreground">顯示 FastAPI 提供的即時受治理測試狀態。</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => overview.refetch()}>
             <RefreshCw className="h-4 w-4" />
-            Refresh
+            重新整理
           </Button>
           <Button
             variant="outline"
             onClick={() => {
               void document.documentElement.requestFullscreen?.();
-              notify({ title: "Dashboard fullscreen requested", tone: "success" });
+              notify({ title: "已切換儀表板全螢幕", tone: "success" });
             }}
           >
             <Maximize2 className="h-4 w-4" />
-            Full screen
+            全螢幕
           </Button>
           <Button
             onClick={() => {
               navigator.clipboard?.writeText(JSON.stringify(data, null, 2));
-              notify({ title: "Dashboard data copied", message: "Overview JSON is on the clipboard.", tone: "success" });
+              notify({ title: "儀表板資料已複製", message: "摘要 JSON 已複製到剪貼簿。", tone: "success" });
             }}
           >
             <Download className="h-4 w-4" />
-            Export
+            匯出
           </Button>
         </div>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard title="Total Targets" value={data.targets_total} icon={Target} />
-        <MetricCard title="Running Targets" value={data.targets_running} icon={Activity} tone="green" />
-        <MetricCard title="Completed Targets" value={data.targets_completed} icon={CheckCircle2} tone="green" />
-        <MetricCard title="Pending Targets" value={pending} icon={Clock3} tone="yellow" />
-        <MetricCard title="Average Risk" value={averageRisk(targets)} icon={Gauge} tone="orange" />
-        <MetricCard title="High Risk Count" value={data.critical_findings + data.high_findings} icon={AlertTriangle} tone="red" />
-        <MetricCard title="Tool Success Rate" value={toolSuccessRate} icon={Crosshair} detail="From /tool-results" />
-        <MetricCard title="Current Active Workers" value={activeWorkers} icon={ServerCog} detail="Running tool tasks" />
+        <MetricCard title="目標總數" value={data.targets_total} icon={Target} />
+        <MetricCard title="執行中目標" value={data.targets_running} icon={Activity} tone="green" />
+        <MetricCard title="已完成目標" value={data.targets_completed} icon={CheckCircle2} tone="green" />
+        <MetricCard title="等待中目標" value={pending} icon={Clock3} tone="yellow" />
+        <MetricCard title="平均風險" value={averageRisk(targets)} icon={Gauge} tone="orange" />
+        <MetricCard title="高風險數量" value={data.critical_findings + data.high_findings} icon={AlertTriangle} tone="red" />
+        <MetricCard title="工具成功率" value={toolSuccessRate} icon={Crosshair} detail="來源：工具結果" />
+        <MetricCard title="目前執行中 Worker" value={activeWorkers} icon={ServerCog} detail="執行中的工具任務" />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <ChartCard title="Risk Trend">
+        <ChartCard title="風險趨勢">
           <ResponsiveContainer width="100%" height={260}>
             <AreaChart data={riskTrend}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -145,7 +145,7 @@ export function Dashboard() {
             </AreaChart>
           </ResponsiveContainer>
         </ChartCard>
-        <ChartCard title="Findings by Severity">
+        <ChartCard title="依嚴重度分類的發現">
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={severityData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -160,7 +160,7 @@ export function Dashboard() {
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
-        <ChartCard title="Tool Usage">
+        <ChartCard title="工具使用情形">
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={toolUsage}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -171,7 +171,7 @@ export function Dashboard() {
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
-        <ChartCard title="MITRE ATT&CK Distribution">
+        <ChartCard title="MITRE ATT&CK 分布">
           <ResponsiveContainer width="100%" height={260}>
             <PieChart>
               <Pie data={Object.entries(mitreDistribution).map(([name, value]) => ({ name, value }))} dataKey="value" nameKey="name">
@@ -188,26 +188,26 @@ export function Dashboard() {
       <div className="grid gap-4 xl:grid-cols-3">
         <Card>
           <CardHeader>
-            <CardTitle>Recent Targets</CardTitle>
+            <CardTitle>最近目標</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {targets.length ? targets.map((target) => <TargetCard key={target.target_id} target={target} />) : <EmptyState title="No target summaries" message="Create or look up a target to seed this UI from existing APIs." />}
+            {targets.length ? targets.map((target) => <TargetCard key={target.target_id} target={target} />) : <EmptyState title="尚無目標摘要" message="建立或開啟目標後即可顯示資料。" />}
           </CardContent>
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>Recent Decisions</CardTitle>
+            <CardTitle>最近決策</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {decisions.length ? decisions.slice(0, 3).map((decision, index) => <DecisionCard decision={decision} index={index} key={index} />) : <EmptyState title="No decisions" message="Decision history appears after target reports expose decisions." />}
+            {decisions.length ? decisions.slice(0, 3).map((decision, index) => <DecisionCard decision={decision} index={index} key={index} />) : <EmptyState title="尚無決策" message="產生目標報告後將顯示決策歷史。" />}
           </CardContent>
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>Recent Reports</CardTitle>
+            <CardTitle>最近報告</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {targets.length ? targets.map((target) => <TargetCard key={target.target_id} target={target} />) : <EmptyState title="No reports" message="Reports are available per target once a target ID is known." />}
+            {targets.length ? targets.map((target) => <TargetCard key={target.target_id} target={target} />) : <EmptyState title="尚無報告" message="開啟目標後即可取得該目標報告。" />}
           </CardContent>
         </Card>
       </div>

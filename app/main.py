@@ -6,6 +6,7 @@ from app.routers.decisions import router as decisions_router
 from app.routers.llm_tools import router as llm_tools_router
 from app.routers.approval import router as approval_router
 from app.routers.worker_preflight import router as worker_preflight_router
+from app.routers.automation import router as automation_router
 
 app = FastAPI(title="M2A Pentest API", version="0.1.0")
 app.include_router(targets_router)
@@ -14,3 +15,4 @@ app.include_router(decisions_router)
 app.include_router(llm_tools_router)
 app.include_router(approval_router)
 app.include_router(worker_preflight_router)
+app.include_router(automation_router)

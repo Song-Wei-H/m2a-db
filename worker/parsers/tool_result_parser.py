@@ -9,6 +9,7 @@ from worker.parsers.mysql_info_parser import parse_mysql_info_output
 from worker.parsers.nmap_parser import parse_nmap_result
 from worker.parsers.nuclei_parser import parse_nuclei_output
 from worker.parsers.ssh_enum_parser import parse_ssh_enum_output
+from worker.parsers.evidence_collector_parser import parse_evidence_collector_output
 
 
 def parse_tool_output(
@@ -32,6 +33,10 @@ def parse_tool_output(
         return parse_ssh_enum_output(raw_output, success=success, host=host, port=port)
     if tool_name == "mysql-info":
         return parse_mysql_info_output(raw_output, success=success, host=host, port=port)
+    if tool_name in {"tls_certificate", "http_security_headers", "dns_metadata"}:
+        return parse_evidence_collector_output(
+            tool_name, raw_output, success=success, host=host, port=port, service=service
+        )
 
     return stable_result(
         tool_name=tool_name,

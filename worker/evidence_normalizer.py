@@ -186,7 +186,12 @@ def _nmap_normalize(
     tool_result_id: int | None = None,
 ) -> list[Evidence]:
     evidence_list: list[Evidence] = []
-    services = parsed_output.get("services") or []
+    services = (
+        parsed_output.get("services")
+        or parsed_output.get("open_ports")
+        or parsed_output.get("ports")
+        or []
+    )
     if not isinstance(services, list):
         services = []
     for service_row in services:
@@ -341,6 +346,37 @@ def _generic_normalize(
     return [evidence]
 
 
+def _remote_evidence_normalize(
+    tool_name: str,
+    parsed_output: dict[str, Any],
+    raw_output: str,
+    ctx: Any | None = None,
+    tool_result_id: int | None = None,
+) -> list[Evidence]:
+    evidence_types = {
+        "tls_certificate": "tls_certificate",
+        "http_security_headers": "http_security_posture",
+        "dns_metadata": "dns_metadata",
+    }
+    details = {
+        key: value for key, value in parsed_output.items()
+        if key not in {"raw_summary", "findings", "tool", "tool_name"}
+    }
+    findings = parsed_output.get("findings")
+    if isinstance(findings, list) and findings and isinstance(findings[0], dict):
+        details.update(findings[0])
+    evidence = _base_evidence(
+        tool_name=tool_name,
+        evidence_type=evidence_types[tool_name],
+        raw_output=raw_output,
+        ctx=ctx,
+        tool_result_id=tool_result_id,
+        confidence=0.90,
+    )
+    evidence["details"].update(details)
+    return [evidence]
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -370,6 +406,8 @@ def normalize_tool_result(
         return _ssh_enum_normalize(parsed_output, raw_output, ctx, tool_result_id)
     if tool_name == "mysql-info":
         return _mysql_info_normalize(parsed_output, raw_output, ctx, tool_result_id)
+    if tool_name in {"tls_certificate", "http_security_headers", "dns_metadata"}:
+        return _remote_evidence_normalize(tool_name, parsed_output, raw_output, ctx, tool_result_id)
     return _generic_normalize(
         tool_name,
         parsed_output,

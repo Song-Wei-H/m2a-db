@@ -5,9 +5,10 @@ import json
 import re
 from typing import Any
 
-from ollama import Client
+import httpx
 from sqlalchemy import select
 
+from app.config import settings
 from app.database import async_session
 from app.models import DecisionScore, LlmRecommendation
 from worker.llm_validator import validate_recommendation
@@ -31,6 +32,9 @@ Allowed tools:
 - httpx_basic
 - nuclei_safe
 - dirb_safe
+- tls_certificate
+- http_security_headers
+- dns_metadata
 
 Important governance rules:
 - If match_confidence is below 0.7, do not recommend remediate.
@@ -43,15 +47,11 @@ Output JSON only.
 Required schema:
 {
   "recommended_action": "stop|continue|verify|remediate",
-  "recommended_tool": "nmap_service|httpx_basic|nuclei_safe|dirb_safe|null",
+  "recommended_tool": "nmap_service|httpx_basic|nuclei_safe|dirb_safe|tls_certificate|http_security_headers|dns_metadata|null",
   "confidence": 0.0,
   "reasoning": ["reason1", "reason2"]
 }
 """
-
-
-OLLAMA_HOST = "http://192.0.2.220:11434"
-OLLAMA_MODEL = "gemma3:27b"
 
 
 def extract_json(text: str) -> dict[str, Any]:
@@ -69,11 +69,25 @@ def extract_json(text: str) -> dict[str, Any]:
     return json.loads(match.group(0))
 
 
-def build_payload(decision: DecisionScore) -> dict[str, Any]:
+async def build_payload(decision: DecisionScore) -> dict[str, Any]:
+    """Build a minimal, auditable decision context without exposing database access."""
     snapshot = decision.input_snapshot or {}
     cve = snapshot.get("cve") or {}
+    async with async_session() as db:
+        history = (
+            await db.execute(
+                select(LlmRecommendation)
+                .where(
+                    LlmRecommendation.target_id == decision.target_id,
+                    LlmRecommendation.decision_score_id != decision.id,
+                )
+                .order_by(LlmRecommendation.id.desc())
+                .limit(settings.llm_context_max_history)
+            )
+        ).scalars().all()
 
     return {
+        "context_contract": "minimal-decision-context-v1",
         "target_id": decision.target_id,
         "decision_score_id": decision.id,
         "open_port_id": decision.open_port_id,
@@ -93,35 +107,60 @@ def build_payload(decision: DecisionScore) -> dict[str, Any]:
         "kev": cve.get("has_kev"),
         "match_type": cve.get("best_match_type"),
         "match_confidence": cve.get("best_match_confidence"),
+        "recent_advisory_history": [
+            {
+                "recommended_action": item.recommended_action,
+                "recommended_tool": item.recommended_tool,
+                "confidence": item.confidence,
+                "validator_status": item.validator_status,
+                "approved": item.approved,
+            }
+            for item in history
+        ],
     }
 
 
-def call_ollama(payload: dict[str, Any]) -> dict[str, Any]:
-    client = Client(host=OLLAMA_HOST)
+def call_litellm(payload: dict[str, Any]) -> dict[str, Any]:
+    """Submit only the controlled decision context to the configured LLM."""
+    headers = {"Content-Type": "application/json"}
+    if settings.llm_send_auth and settings.llm_api_key:
+        headers["Authorization"] = f"Bearer {settings.llm_api_key}"
 
-    response = client.chat(
-        model=OLLAMA_MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": (
-                    "Analyze this governed pentest evidence and return ONLY valid JSON. "
-                    "Do not use markdown. Do not explain outside JSON.\n\n"
-                    + json.dumps(payload, ensure_ascii=False)
-                ),
-            },
-        ],
-        options={
+    response = httpx.post(
+        f"{settings.llm_base_url.rstrip('/')}/chat/completions",
+        headers=headers,
+        json={
+            "model": settings.llm_model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        "Analyze this governed pentest evidence and return ONLY valid JSON. "
+                        "Do not use markdown. Do not explain outside JSON.\n\n"
+                        + json.dumps(payload, ensure_ascii=False)
+                    ),
+                },
+            ],
             "temperature": 0,
         },
+        timeout=settings.llm_timeout_seconds,
     )
-
-    content = response["message"]["content"]
+    response.raise_for_status()
+    body = response.json()
+    try:
+        content = body["choices"][0]["message"]["content"]
+    except (IndexError, KeyError, TypeError) as exc:
+        raise ValueError("LLM response did not contain a chat-completion message") from exc
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("LLM response content was empty")
     raw = extract_json(content)
+    candidate = raw.copy()
+    if isinstance(candidate.get("recommended_tool"), str) and candidate["recommended_tool"].strip().lower() in {"", "null", "none"}:
+        candidate["recommended_tool"] = None
 
     validated = validate_recommendation(
-        raw,
+        candidate,
         match_confidence=payload.get("match_confidence"),
         httpx_enabled=False,
     )
@@ -182,8 +221,8 @@ async def run_for_decision_score(decision_score_id: int) -> int:
     if decision is None:
         raise ValueError(f"decision_score_id={decision_score_id} not found")
 
-    payload = build_payload(decision)
-    llm_result = call_ollama(payload)
+    payload = await build_payload(decision)
+    llm_result = call_litellm(payload)
 
     return await save_llm_recommendation(
         decision=decision,
@@ -204,8 +243,8 @@ async def run_latest() -> int:
     if decision is None:
         raise ValueError("No decision_scores found")
 
-    payload = build_payload(decision)
-    llm_result = call_ollama(payload)
+    payload = await build_payload(decision)
+    llm_result = call_litellm(payload)
 
     return await save_llm_recommendation(
         decision=decision,

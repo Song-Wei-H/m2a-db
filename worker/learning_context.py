@@ -6,7 +6,10 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 
-DISCOVERY_TOOLS = {"nmap_service", "httpx_basic", "ssh-enum", "mysql-info"}
+DISCOVERY_TOOLS = {
+    "nmap_service", "httpx_basic", "ssh-enum", "mysql-info",
+    "tls_certificate", "http_security_headers", "dns_metadata",
+}
 DEPTH_TOOLS = {"nuclei_safe", "dirb_safe"}
 
 

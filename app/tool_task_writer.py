@@ -100,3 +100,20 @@ async def create_tool_task_if_not_exists(
     session.add(task)
     await session.flush()
     return task, True
+
+
+async def create_retest_tool_task(
+    session: AsyncSession,
+    **values: Any,
+) -> ToolTask:
+    """Create an explicitly human-requested new-round task.
+
+    Retests intentionally coexist with completed historical tasks. Callers
+    must enforce completed-target state and preserve the human reason.
+    """
+    if not str(values.get("proposal_reason") or "").strip():
+        raise ValueError("retest proposal_reason is required")
+    task = ToolTask(**values)
+    session.add(task)
+    await session.flush()
+    return task

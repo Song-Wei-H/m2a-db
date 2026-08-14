@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.database import get_db
 from app.models import Target, ToolTask
-from app.tool_task_constants import APPROVAL_REJECTED, APPROVED, PENDING, PENDING_APPROVAL
-from app.tool_task_state import validate_approval_transition
+from app.tool_task_constants import APPROVAL_REJECTED, APPROVED, PENDING, PENDING_APPROVAL, REJECTED
+from app.tool_task_state import validate_approval_transition, validate_tool_task_transition
 
 router = APIRouter(tags=["approvals"])
 
@@ -88,7 +88,9 @@ async def approve_task(
 
     validate_approval_transition(task.approval_status, APPROVED)
     task.approval_status = APPROVED
-    task.approved_at = datetime.now(UTC)
+    # tool_tasks.approved_at is a PostgreSQL TIMESTAMP (without time zone).
+    # Persist a naive UTC value instead of passing an aware value to asyncpg.
+    task.approved_at = datetime.now(UTC).replace(tzinfo=None)
     task.approved_by = body.approved_by
     task.approval_decision_reason = body.reason
 
@@ -123,8 +125,11 @@ async def reject_task(
         )
 
     validate_approval_transition(task.approval_status, APPROVAL_REJECTED)
+    validate_tool_task_transition(task.status, REJECTED)
     task.approval_status = APPROVAL_REJECTED
-    task.approved_at = datetime.now(UTC)
+    task.status = REJECTED
+    # Keep the rejection audit timestamp aligned with the same column contract.
+    task.approved_at = datetime.now(UTC).replace(tzinfo=None)
     task.approved_by = body.approved_by
     task.approval_decision_reason = body.reason
     task.reject_reason = (

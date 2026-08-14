@@ -6,11 +6,12 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/targets": "http://127.0.0.1:8000",
-      "/dashboard": "http://127.0.0.1:8000",
-      "/decisions": "http://127.0.0.1:8000",
-      "/tools": "http://127.0.0.1:8000",
-      "/approvals": "http://127.0.0.1:8000"
+      "/targets": process.env.VITE_M2A_PROXY_TARGET ?? "http://127.0.0.1:8000",
+      "/dashboard": process.env.VITE_M2A_PROXY_TARGET ?? "http://127.0.0.1:8000",
+      "/decisions": process.env.VITE_M2A_PROXY_TARGET ?? "http://127.0.0.1:8000",
+      "/tools": process.env.VITE_M2A_PROXY_TARGET ?? "http://127.0.0.1:8000",
+      "/approvals": process.env.VITE_M2A_PROXY_TARGET ?? "http://127.0.0.1:8000",
+      "/automation": process.env.VITE_M2A_PROXY_TARGET ?? "http://127.0.0.1:8000"
     }
   }
 });

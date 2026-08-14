@@ -18,12 +18,19 @@ def parse_allowed_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Netwo
 
 
 def target_in_allowed_scope(target: str) -> bool:
-    """Return True if target is an IP address or explicit hostname in scope."""
+    """Validate target syntax and, when enabled, its local allowlist scope."""
     host = target.strip().lower().rstrip(".")
     try:
         addr = ipaddress.ip_address(host)
     except ValueError:
+        if not HOSTNAME_RE.match(host):
+            return False
+        if not settings.enforce_target_scope:
+            return True
         return hostname_in_allowed_scope(host)
+
+    if not settings.enforce_target_scope:
+        return True
 
     for network in parse_allowed_networks():
         if addr in network:
@@ -57,7 +64,7 @@ def assert_target_in_scope(target: str) -> str:
             ]
         )
         allowed = scopes if not hostname_scopes else f"{scopes}; hostnames={hostname_scopes}"
-        raise ValueError(
-            f"Target {host!r} is outside allowed scope ({allowed})"
-        )
+        if settings.enforce_target_scope:
+            raise ValueError(f"Target {host!r} is outside allowed scope ({allowed})")
+        raise ValueError(f"Target {host!r} is not a valid IP address or hostname")
     return host
