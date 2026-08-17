@@ -59,7 +59,7 @@ M2A 不是可任意下指令的攻擊代理。LLM 或外部決策器只能提出
 - Node.js 與 pnpm（使用 UI 時）
 - Git（只在版本同步時需要）
 
-Kali Worker 需安裝 Repository 的 Python dependencies，以及實際允許使用的工具。目前 canonical allowlist：
+Kali Worker 需安裝 Repository 的 Python dependencies，以及實際允許使用的工具。目前 canonical allowlist 共九項；其中前三項是低影響、受治理的 Evidence Collector：
 
 - `nmap_service`
 - `httpx_basic`
@@ -67,6 +67,9 @@ Kali Worker 需安裝 Repository 的 Python dependencies，以及實際允許使
 - `dirb_safe`
 - `ssh-enum`
 - `mysql-info`
+- `tls_certificate`
+- `http_security_headers`
+- `dns_metadata`
 
 缺少工具時應讓任務失敗並留下紀錄，不得改成任意 Shell 繞過。
 
@@ -145,6 +148,9 @@ Get-Content -Raw .\initdb\024_approval_decision_audit.sql |
   docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
 
 Get-Content -Raw .\initdb\025_normalized_results_schema_alignment.sql |
+  docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
+
+Get-Content -Raw .\initdb\026_remote_evidence_tools.sql |
   docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
 ```
 
