@@ -79,6 +79,36 @@ async def test_batch1_registry_tier_is_authoritative_and_auto_authorizes(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("tool_name", "action_id", "port", "service"), [
+    ("ssh-enum", "ssh.algorithms_enum.v1", 22, "ssh"),
+    ("mysql-info", "mysql.server_info.v1", 3306, "mysql"),
+])
+@pytest.mark.parametrize("drift_field", ["template_version", "execution_identity"])
+async def test_batch4_registry_template_or_execution_identity_drift_blocks_authorization(
+    tool_name, action_id, port, service, drift_field,
+):
+    values = {
+        "action_id": action_id,
+        "validation_tier": 1,
+        "execution_identity": ACTION_IDENTITIES[action_id],
+        "template_version": ACTION_TEMPLATES[action_id],
+    }
+    values[drift_field] = "drift"
+    db = GovernanceSession(SimpleNamespace(**values))
+    target = Target(id=10, target="service.example", scope="service.example")
+    params = canonical_parameters(
+        target=target.target, port=port, protocol="tcp", service=service,
+        action_id=action_id,
+    )
+    with pytest.raises(ValueError, match="identity does not match canonical contract"):
+        await propose_and_authorize(
+            db, target=target, tool_name=tool_name, parameters=params,
+            reason="drift test", confidence=.5, provider="test",
+            authorization_source="test",
+        )
+
+
+@pytest.mark.asyncio
 async def test_tier3_requires_explicit_human_authorization():
     action = SimpleNamespace(action_id="nuclei.safe_scan.v1", validation_tier=3,
         execution_identity=ACTION_IDENTITIES["nuclei.safe_scan.v1"], template_version=ACTION_TEMPLATES["nuclei.safe_scan.v1"])
