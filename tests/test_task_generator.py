@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch, MagicMock
 from worker.task_generator import generate_tool_task, _existing_tool_task
 from app.models import ToolTask
@@ -148,8 +149,20 @@ async def test_failed_task_recreation():
         mock_get_registry.return_value = MagicMock(approval_required=False)
         
         # Mock the database session and task creation
-        with patch("worker.task_generator.async_session") as mock_session:
+        with patch("worker.task_generator.async_session") as mock_session, \
+             patch("worker.task_generator.propose_and_authorize", new_callable=AsyncMock) as authorize, \
+             patch("worker.task_generator.create_tool_task_if_not_exists", new_callable=AsyncMock) as create_task:
             session = make_session()
+            session.get = AsyncMock(side_effect=[
+                SimpleNamespace(id=1, target="web.example", scope="web.example"),
+                SimpleNamespace(id=104, port=80, protocol="tcp", service="http"),
+            ])
+            authorize.return_value = SimpleNamespace(
+                proposal=SimpleNamespace(investigation_id="inv-httpx"),
+                action=SimpleNamespace(action_id="httpx.web_probe.v1"),
+                authorization=SimpleNamespace(id=501),
+            )
+            create_task.return_value = (SimpleNamespace(id=502), True)
             mock_session.return_value = FakeAsyncSessionContext(session)
             
             result = await generate_tool_task(

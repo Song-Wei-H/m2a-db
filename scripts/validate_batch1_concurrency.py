@@ -21,12 +21,12 @@ async def main(action: str = "tls") -> None:
     try:
         async with async_session() as db, db.begin():
             target = (await db.execute(select(Target).order_by(Target.id).limit(1))).scalar_one()
-            action_id = ("nmap.service_fingerprint.v1" if action == "nmap"
-                         else "tls.certificate_collect.v1")
-            tool_name = "nmap_service" if action == "nmap" else "tls_certificate"
-            port = None if action == "nmap" else 443
-            protocol = None if action == "nmap" else "tcp"
-            service = None if action == "nmap" else "tls"
+            config = {
+                "tls": ("tls.certificate_collect.v1", "tls_certificate", 443, "tcp", "tls"),
+                "nmap": ("nmap.service_fingerprint.v1", "nmap_service", None, None, None),
+                "httpx": ("httpx.web_probe.v1", "httpx_basic", 80, "tcp", "http"),
+            }
+            action_id, tool_name, port, protocol, service = config[action]
             params = canonical_parameters(target=target.target, port=port, protocol=protocol,
                                           service=service, action_id=action_id)
             proposal = DecisionProposal(
@@ -81,5 +81,5 @@ async def main(action: str = "tls") -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--action", choices=("tls", "nmap"), default="tls")
+    parser.add_argument("--action", choices=("tls", "nmap", "httpx"), default="tls")
     asyncio.run(main(parser.parse_args().action))

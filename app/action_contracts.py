@@ -10,6 +10,7 @@ ACTION_BY_TOOL = {
     "dns_metadata": "dns.metadata_collect.v1",
     "tls_certificate": "tls.certificate_collect.v1",
     "nmap_service": "nmap.service_fingerprint.v1",
+    "httpx_basic": "httpx.web_probe.v1",
 }
 TOOL_BY_ACTION = {action: tool for tool, action in ACTION_BY_TOOL.items()}
 PROTECTED_ACTION_TOOLS = frozenset(ACTION_BY_TOOL)
@@ -34,12 +35,17 @@ NMAP_IDENTITY = (
     "argv:nmap:-sV:{target}:ports=default:no-script:no-port-override:"
     "timeout=180:nmap-default-retry:v2"
 )
+HTTPX_IDENTITY = (
+    "argv:httpx:-u:{canonical_url}:-json:-title:-tech-detect:-status-code:"
+    "method=probe:path=/:redirect=false:retry=httpx-default:timeout=180:v2"
+)
 ACTION_IDENTITIES = {
     "http_security_headers.collect.v1": HEADER_IDENTITY,
     "nuclei.safe_scan.v1": NUCLEI_IDENTITY,
     "dns.metadata_collect.v1": DNS_IDENTITY,
     "tls.certificate_collect.v1": TLS_IDENTITY,
     "nmap.service_fingerprint.v1": NMAP_IDENTITY,
+    "httpx.web_probe.v1": HTTPX_IDENTITY,
 }
 ACTION_TEMPLATES = {
     "http_security_headers.collect.v1": "http_security_headers_v2",
@@ -47,6 +53,7 @@ ACTION_TEMPLATES = {
     "dns.metadata_collect.v1": "dns_metadata_v2",
     "tls.certificate_collect.v1": "tls_certificate_v2",
     "nmap.service_fingerprint.v1": "nmap_service_v2",
+    "httpx.web_probe.v1": "httpx_web_probe_v2",
 }
 
 
@@ -105,6 +112,28 @@ def canonical_action_parameters(
             "retry_behavior": "nmap-default",
             "scan_type": "service-version-detection",
             "scripts": [],
+            "service": service or None,
+            "target": host,
+            "timeout_seconds": 180,
+        }
+    if action_id == "httpx.web_probe.v1":
+        selected_port = port or 80
+        host = target.strip()
+        url = canonical_http_url(target=host, port=selected_port, service=service)
+        return {
+            "argv": ["httpx", "-u", url, "-json", "-title", "-tech-detect", "-status-code"],
+            "canonical_url": url,
+            "host": host,
+            "method": "httpx-default-probe",
+            "path": "/",
+            "port": selected_port,
+            "protocol": protocol or None,
+            "redirect_policy": {
+                "follow": False, "max_redirects": 0, "cross_host": False,
+                "cross_port": False, "cross_scheme": False,
+            },
+            "retry_behavior": "httpx-default",
+            "scheme": url.split(":", 1)[0],
             "service": service or None,
             "target": host,
             "timeout_seconds": 180,

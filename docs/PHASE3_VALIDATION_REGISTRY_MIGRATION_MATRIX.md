@@ -12,6 +12,10 @@
 > `nmap.service_fingerprint.v1`. See `PHASE3_BATCH2_COMPLETION.md`. No Batch 3
 > migration is implied.
 
+> Batch 3 was implemented and validated on 2026-08-20 for
+> `httpx.web_probe.v1`. See `PHASE3_BATCH3_COMPLETION.md`. No Batch 4 migration
+> is implied.
+
 Baseline: `5317aef` (`feat: add authorization-first governance slice`)
 
 Status: audit and migration proposal only. No action migration is authorized by this document.

@@ -32,7 +32,7 @@ async def test_find_active_tool_task_matches_null_open_port():
 
 @pytest.mark.asyncio
 async def test_create_tool_task_returns_existing_when_insert_conflicts():
-    existing = ToolTask(id=44, target_id=7, open_port_id=3, tool_name="httpx_basic", status="pending")
+    existing = ToolTask(id=44, target_id=7, open_port_id=3, tool_name="dirb_safe", status="pending")
     session = MagicMock()
     session.execute = AsyncMock(side_effect=[FakeScalarResult(None), FakeScalarResult(existing)])
     session.get = AsyncMock(return_value=None)
@@ -41,7 +41,7 @@ async def test_create_tool_task_returns_existing_when_insert_conflicts():
         session,
         target_id=7,
         open_port_id=3,
-        tool_name="httpx_basic",
+        tool_name="dirb_safe",
         status="pending",
         priority=50,
     )
@@ -52,7 +52,7 @@ async def test_create_tool_task_returns_existing_when_insert_conflicts():
 
 @pytest.mark.asyncio
 async def test_create_tool_task_reports_inserted_when_insert_returns_id():
-    inserted = ToolTask(id=45, target_id=7, open_port_id=3, tool_name="httpx_basic", status="pending")
+    inserted = ToolTask(id=45, target_id=7, open_port_id=3, tool_name="dirb_safe", status="pending")
     session = MagicMock()
     session.execute = AsyncMock(return_value=FakeScalarResult(45))
     session.get = AsyncMock(return_value=inserted)
@@ -61,7 +61,7 @@ async def test_create_tool_task_reports_inserted_when_insert_returns_id():
         session,
         target_id=7,
         open_port_id=3,
-        tool_name="httpx_basic",
+        tool_name="dirb_safe",
         status="pending",
         priority=50,
     )

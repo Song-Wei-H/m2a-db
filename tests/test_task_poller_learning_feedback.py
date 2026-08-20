@@ -128,7 +128,7 @@ async def test_execute_task_remote_timeout_marks_failed_and_writes_tool_result()
         target_id=14,
         open_port_id=17,
         decision_score_id=52,
-        tool_name="httpx_basic",
+        tool_name="dirb_safe",
         status="pending",
         approval_required=False,
         approval_status="not_required",
@@ -169,7 +169,7 @@ async def test_execute_task_remote_timeout_marks_failed_and_writes_tool_result()
     fail_db.add = MagicMock()
     fail_db.flush = AsyncMock()
 
-    timeout_reason = "remote tool timeout after 300s: httpx_basic target=198.51.100.13 port=443"
+    timeout_reason = "remote tool timeout after 300s: dirb_safe target=198.51.100.13 port=443"
 
     with patch(
         "worker.task_poller.async_session",
@@ -197,7 +197,7 @@ async def test_execute_task_remote_timeout_marks_failed_and_writes_tool_result()
     assert failed_result.target_id == 14
     assert failed_result.open_port_id == 17
     assert failed_result.tool_task_id == 86
-    assert failed_result.tool_name == "httpx_basic"
+    assert failed_result.tool_name == "dirb_safe"
     assert failed_result.success is False
     assert failed_result.raw_output == timeout_reason
     assert failed_result.evidence == timeout_reason

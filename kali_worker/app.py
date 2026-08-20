@@ -144,10 +144,11 @@ def run_nmap(target: str) -> dict[str, Any]:
     return run_command(["nmap", "-sV", target])
 
 
-def run_httpx(target: str, port: int | None, service: str | None) -> dict[str, Any]:
+def run_httpx(target: str, port: int | None, service: str | None,
+              canonical_url: str | None = None) -> dict[str, Any]:
     return run_command([
-        "httpx", "-u", target_url(target, port, service), "-json", "-title",
-        "-tech-detect", "-status-code", "-follow-redirects",
+        "httpx", "-u", canonical_url or target_url(target, port, service), "-json", "-title",
+        "-tech-detect", "-status-code",
     ])
 
 
@@ -294,7 +295,7 @@ def execute(req: ExecuteRequest) -> dict[str, Any]:
     authorized_sni = (req.authorization_parameters or {}).get("sni")
     handlers = {
         "nmap_service": lambda: run_nmap(req.target),
-        "httpx_basic": lambda: run_httpx(req.target, req.port, req.service),
+        "httpx_basic": lambda: run_httpx(req.target, req.port, req.service, authorized_url),
         "nuclei_safe": lambda: run_nuclei(req.target, req.port, req.service, authorized_url),
         "dirb_safe": lambda: run_dirb(req.target, req.port, req.service),
         "ssh-enum": lambda: run_ssh_enum(req.target, req.port),
