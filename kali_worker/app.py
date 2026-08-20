@@ -170,14 +170,14 @@ def run_mysql_info(target: str, port: int | None) -> dict[str, Any]:
     return run_command(["nmap", "--script", "mysql-info", "-p", str(port or 3306), target])
 
 
-def run_tls_certificate(target: str, port: int | None) -> dict[str, Any]:
+def run_tls_certificate(target: str, port: int | None, sni: str | None = None) -> dict[str, Any]:
     selected_port = port or 443
     try:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
         with socket.create_connection((target, selected_port), timeout=10) as tcp_socket:
-            with context.wrap_socket(tcp_socket, server_hostname=target) as tls_socket:
+            with context.wrap_socket(tcp_socket, server_hostname=sni or target) as tls_socket:
                 der_certificate = tls_socket.getpeercert(binary_form=True)
                 cipher = tls_socket.cipher()
                 return structured_result("tls_certificate", {
@@ -291,6 +291,7 @@ def execute(req: ExecuteRequest) -> dict[str, Any]:
     except (OSError, ValueError) as exc:
         return {"status": "rejected", "reason": str(exc), "tool": req.tool}
     authorized_url = (req.authorization_parameters or {}).get("canonical_url")
+    authorized_sni = (req.authorization_parameters or {}).get("sni")
     handlers = {
         "nmap_service": lambda: run_nmap(req.target),
         "httpx_basic": lambda: run_httpx(req.target, req.port, req.service),
@@ -298,7 +299,7 @@ def execute(req: ExecuteRequest) -> dict[str, Any]:
         "dirb_safe": lambda: run_dirb(req.target, req.port, req.service),
         "ssh-enum": lambda: run_ssh_enum(req.target, req.port),
         "mysql-info": lambda: run_mysql_info(req.target, req.port),
-        "tls_certificate": lambda: run_tls_certificate(req.target, req.port),
+        "tls_certificate": lambda: run_tls_certificate(req.target, req.port, authorized_sni),
         "http_security_headers": lambda: run_http_security_headers(req.target, req.port, req.service, authorized_url),
         "dns_metadata": lambda: run_dns_metadata(req.target, addresses),
     }

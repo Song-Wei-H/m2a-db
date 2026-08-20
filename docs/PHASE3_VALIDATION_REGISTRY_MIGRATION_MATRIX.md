@@ -4,6 +4,10 @@
 > `PHASE3_BATCH0_COMPLETION.md`. This matrix remains the audit authority for
 > later batches; no Batch 1 migration is implied.
 
+> Batch 1 was implemented and validated on 2026-08-20 for
+> `dns.metadata_collect.v1` and `tls.certificate_collect.v1`. See
+> `PHASE3_BATCH1_COMPLETION.md`. No Batch 2 migration is implied.
+
 Baseline: `5317aef` (`feat: add authorization-first governance slice`)
 
 Status: audit and migration proposal only. No action migration is authorized by this document.

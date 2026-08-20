@@ -52,6 +52,29 @@ async def test_registry_tier_is_authoritative_and_tier2_auto_authorizes():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("tool_name", "action_id", "tier", "port", "service"), [
+    ("dns_metadata", "dns.metadata_collect.v1", 0, None, "dns"),
+    ("tls_certificate", "tls.certificate_collect.v1", 1, 443, "tls"),
+])
+async def test_batch1_registry_tier_is_authoritative_and_auto_authorizes(
+    tool_name, action_id, tier, port, service,
+):
+    action = SimpleNamespace(action_id=action_id, validation_tier=tier,
+        execution_identity=ACTION_IDENTITIES[action_id], template_version=ACTION_TEMPLATES[action_id])
+    db = GovernanceSession(action)
+    target = Target(id=9, target="asset.example", scope="asset.example")
+    params = canonical_parameters(target=target.target, port=port, protocol="tcp" if port else None,
+                                  service=service, action_id=action_id)
+    governed = await propose_and_authorize(
+        db, target=target, tool_name=tool_name, parameters=params,
+        reason="caller and LLM claimed a different tier", confidence=.4,
+        provider="llm", authorization_source="gade-tier-policy",
+    )
+    assert governed.authorization.validation_tier == tier
+    assert governed.authorization.execution_limit == 1
+
+
+@pytest.mark.asyncio
 async def test_tier3_requires_explicit_human_authorization():
     action = SimpleNamespace(action_id="nuclei.safe_scan.v1", validation_tier=3,
         execution_identity=ACTION_IDENTITIES["nuclei.safe_scan.v1"], template_version=ACTION_TEMPLATES["nuclei.safe_scan.v1"])

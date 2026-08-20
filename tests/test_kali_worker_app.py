@@ -19,9 +19,15 @@ def test_dns_metadata_returns_resolved_addresses(monkeypatch):
         (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.10", 0)),
     ])
     monkeypatch.setattr(socket, "getfqdn", lambda target: "asset.example")
-    body = TestClient(worker.app).post(
-        "/execute", json={"tool": "dns_metadata", "target": "asset.example"}
-    ).json()
+    req = worker.ExecuteRequest(tool="dns_metadata", target="asset.example",
+                                action_id="dns.metadata_collect.v1")
+    parameters = worker.canonical_parameters(req)
+    body = TestClient(worker.app).post("/execute", json={
+        **req.model_dump(),
+        "execution_identity": worker.ACTION_IDENTITIES["dns.metadata_collect.v1"],
+        "authorization_parameters": parameters,
+        "authorization_parameters_hash": parameter_hash(parameters),
+    }).json()
     assert body["status"] == "completed"
     assert body["parsed_result"]["addresses"] == [
         {"record_type": "A", "address": "192.0.2.10"}

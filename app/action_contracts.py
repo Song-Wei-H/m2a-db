@@ -7,6 +7,8 @@ from typing import Any
 ACTION_BY_TOOL = {
     "http_security_headers": "http_security_headers.collect.v1",
     "nuclei_safe": "nuclei.safe_scan.v1",
+    "dns_metadata": "dns.metadata_collect.v1",
+    "tls_certificate": "tls.certificate_collect.v1",
 }
 TOOL_BY_ACTION = {action: tool for tool, action in ACTION_BY_TOOL.items()}
 PROTECTED_ACTION_TOOLS = frozenset(ACTION_BY_TOOL)
@@ -19,13 +21,25 @@ NUCLEI_IDENTITY = (
     "argv:nuclei:-u:{canonical_url}:-severity:critical,high:-rl:5:"
     "-timeout:5:-retries:0:-no-color:v2"
 )
+DNS_IDENTITY = (
+    "builtin:dns-metadata:getaddrinfo=A,AAAA:ptr=ip-only:fqdn=true:"
+    "resolver=system:retry=0:timeout=worker-request-ceiling:v2"
+)
+TLS_IDENTITY = (
+    "builtin:tls-certificate:tcp-connect:tls-client:sni={sni}:timeout=10:"
+    "tls-verify=false:certificate-sha256=true:v2"
+)
 ACTION_IDENTITIES = {
     "http_security_headers.collect.v1": HEADER_IDENTITY,
     "nuclei.safe_scan.v1": NUCLEI_IDENTITY,
+    "dns.metadata_collect.v1": DNS_IDENTITY,
+    "tls.certificate_collect.v1": TLS_IDENTITY,
 }
 ACTION_TEMPLATES = {
     "http_security_headers.collect.v1": "http_security_headers_v2",
     "nuclei.safe_scan.v1": "nuclei_safe_v2",
+    "dns.metadata_collect.v1": "dns_metadata_v2",
+    "tls.certificate_collect.v1": "tls_certificate_v2",
 }
 
 
@@ -51,6 +65,27 @@ def canonical_action_parameters(
 ) -> dict[str, Any]:
     if action_id not in TOOL_BY_ACTION:
         raise ValueError(f"Unknown migrated action {action_id!r}")
+    if action_id == "dns.metadata_collect.v1":
+        host = target.strip()
+        return {
+            "host": host, "normalized_hostname": host.rstrip(".").lower(),
+            "port": None, "protocol": protocol or None, "service": service or None,
+            "target": host,
+            "query_behavior": {
+                "address_families": ["A", "AAAA"], "canonical_name": True,
+                "ptr_for_ip_target": True, "resolver": "system",
+                "retry_ceiling": 0, "timeout": "worker-request-ceiling",
+            },
+        }
+    if action_id == "tls.certificate_collect.v1":
+        selected_port = port or 443
+        host = target.strip()
+        return {
+            "certificate_sha256": True, "host": host, "port": selected_port,
+            "protocol": protocol or None, "protocol_expectation": "tls",
+            "service": service or None, "sni": host, "target": host,
+            "timeout_seconds": 10, "tls_verify": False,
+        }
     selected_port = port or 80
     url = canonical_http_url(target=target, port=selected_port, service=service)
     parameters: dict[str, Any] = {

@@ -19,8 +19,8 @@ def authorized_request(action_id: str, tool: str, target: str = "192.0.2.20") ->
 
 def test_batch0_contract_has_versioned_unique_template_and_execution_identity():
     assert set(ACTION_IDENTITIES) == set(ACTION_TEMPLATES)
-    assert len(set(ACTION_IDENTITIES.values())) == 2
-    assert len(set(ACTION_TEMPLATES.values())) == 2
+    assert len(set(ACTION_IDENTITIES.values())) == len(ACTION_IDENTITIES)
+    assert len(set(ACTION_TEMPLATES.values())) == len(ACTION_TEMPLATES)
     assert all(value.endswith("v2") for value in ACTION_IDENTITIES.values())
     assert all(value.endswith("_v2") for value in ACTION_TEMPLATES.values())
 
