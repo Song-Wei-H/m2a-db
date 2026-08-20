@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+import ipaddress
+from typing import Any
+
+
+ACTION_BY_TOOL = {
+    "http_security_headers": "http_security_headers.collect.v1",
+    "nuclei_safe": "nuclei.safe_scan.v1",
+}
+TOOL_BY_ACTION = {action: tool for tool, action in ACTION_BY_TOOL.items()}
+PROTECTED_ACTION_TOOLS = frozenset(ACTION_BY_TOOL)
+
+HEADER_IDENTITY = (
+    "builtin:http-security-headers:head-root:user-agent=M2A-Worker/1:"
+    "connection=close:timeout=10:tls-verify=false:redirect=false:body=false:v2"
+)
+NUCLEI_IDENTITY = (
+    "argv:nuclei:-u:{canonical_url}:-severity:critical,high:-rl:5:"
+    "-timeout:5:-retries:0:-no-color:v2"
+)
+ACTION_IDENTITIES = {
+    "http_security_headers.collect.v1": HEADER_IDENTITY,
+    "nuclei.safe_scan.v1": NUCLEI_IDENTITY,
+}
+ACTION_TEMPLATES = {
+    "http_security_headers.collect.v1": "http_security_headers_v2",
+    "nuclei.safe_scan.v1": "nuclei_safe_v2",
+}
+
+
+def canonical_http_url(*, target: str, port: int | None, service: str | None, path: str = "/") -> str:
+    host = target.strip()
+    try:
+        if ipaddress.ip_address(host).version == 6:
+            host = f"[{host}]"
+    except ValueError:
+        pass
+    selected_port = port or 80
+    service_name = (service or "").lower()
+    scheme = "https" if selected_port in {443, 8443} or any(
+        marker in service_name for marker in ("https", "ssl", "tls")
+    ) else "http"
+    normalized_path = "/" + path.lstrip("/")
+    return f"{scheme}://{host}:{selected_port}{normalized_path}"
+
+
+def canonical_action_parameters(
+    *, action_id: str, target: str, port: int | None,
+    protocol: str | None, service: str | None,
+) -> dict[str, Any]:
+    if action_id not in TOOL_BY_ACTION:
+        raise ValueError(f"Unknown migrated action {action_id!r}")
+    selected_port = port or 80
+    url = canonical_http_url(target=target, port=selected_port, service=service)
+    parameters: dict[str, Any] = {
+        "canonical_url": url,
+        "host": target.strip(),
+        "path": "/",
+        "port": selected_port,
+        "protocol": protocol or None,
+        "scheme": url.split(":", 1)[0],
+        "service": service or None,
+        "target": target.strip(),
+    }
+    if action_id == "http_security_headers.collect.v1":
+        parameters["collector"] = {
+            "body_read": False, "connection": "close", "follow_redirects": False,
+            "method": "HEAD", "timeout_seconds": 10, "tls_verify": False,
+            "user_agent": "M2A-Worker/1",
+        }
+    else:
+        parameters["argv"] = [
+            "nuclei", "-u", url, "-severity", "critical,high", "-rl", "5",
+            "-timeout", "5", "-retries", "0", "-no-color",
+        ]
+    return parameters

@@ -359,10 +359,13 @@ async def execute_task(task_id: int) -> None:
         if getattr(task, "execution_authorization_id", None) is not None:
             authorization = await db.get(ExecutionAuthorization, task.execution_authorization_id)
             actual_parameters = canonical_parameters(
-                target=ctx.host, port=ctx.port, protocol=ctx.protocol, service=ctx.service
+                target=ctx.host, port=ctx.port, protocol=ctx.protocol, service=ctx.service,
+                action_id=task.action_id,
             )
             if (
                 authorization is None
+                or authorization.action_id != task.action_id
+                or authorization.target_id != task.target_id
                 or authorization.canonical_parameters != actual_parameters
                 or authorization.parameters_hash != parameter_hash(actual_parameters)
             ):

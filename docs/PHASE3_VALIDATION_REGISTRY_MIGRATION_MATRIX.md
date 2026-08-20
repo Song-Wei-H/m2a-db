@@ -1,5 +1,9 @@
 # Phase 3 Validation Registry / Tier Migration Matrix
 
+> Batch 0 was implemented and validated on 2026-08-20. See
+> `PHASE3_BATCH0_COMPLETION.md`. This matrix remains the audit authority for
+> later batches; no Batch 1 migration is implied.
+
 Baseline: `5317aef` (`feat: add authorization-first governance slice`)
 
 Status: audit and migration proposal only. No action migration is authorized by this document.

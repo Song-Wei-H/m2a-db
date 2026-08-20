@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ToolTask
+from app.action_contracts import ACTION_BY_TOOL
 from app.tool_task_constants import ACTIVE_TASK_STATUSES
 
 
@@ -42,6 +43,35 @@ async def create_tool_task_if_not_exists(
     target_id = values["target_id"]
     open_port_id = values.get("open_port_id")
     tool_name = values["tool_name"]
+    if tool_name in ACTION_BY_TOOL and values.get("status") != "rejected":
+        if (not values.get("execution_authorization_id")
+                or values.get("action_id") != ACTION_BY_TOOL[tool_name]
+                or not values.get("investigation_id")):
+            from app.execution_governance import canonical_parameters, propose_and_authorize
+            from app.models import OpenPort, Target
+            target = await session.get(Target, target_id)
+            port_row = await session.get(OpenPort, open_port_id) if open_port_id else None
+            if target is None:
+                raise ValueError(f"target_id={target_id} not found")
+            action_id = ACTION_BY_TOOL[tool_name]
+            governed = await propose_and_authorize(
+                session, target=target, tool_name=tool_name,
+                parameters=canonical_parameters(
+                    target=target.target, port=port_row.port if port_row else None,
+                    protocol=port_row.protocol if port_row else None,
+                    service=port_row.service if port_row else None, action_id=action_id,
+                ),
+                reason=str(values.get("proposal_reason") or values.get("approval_reason")
+                           or "Legacy creation path adapted by canonical ToolTask writer"),
+                confidence=None, provider="legacy-governance-adapter",
+                authorization_source="gade-tier-policy",
+            )
+            if governed.authorization is None:
+                raise ValueError(f"Human authorization required for {action_id}")
+            values.update(investigation_id=governed.proposal.investigation_id,
+                          action_id=governed.action.action_id,
+                          execution_authorization_id=governed.authorization.id,
+                          approval_required=False, approval_status="not_required")
 
     stmt = (
         pg_insert(ToolTask)

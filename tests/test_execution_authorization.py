@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.execution_governance import canonical_parameters, parameter_hash, propose_and_authorize, utcnow_naive
+from app.action_contracts import ACTION_IDENTITIES, ACTION_TEMPLATES
 from app.models import Target
 from worker.task_poller import _claim_task
 
@@ -38,10 +39,10 @@ class GovernanceSession:
 @pytest.mark.asyncio
 async def test_registry_tier_is_authoritative_and_tier2_auto_authorizes():
     action = SimpleNamespace(action_id="nuclei.safe_scan.v1", validation_tier=2,
-        execution_identity="nuclei-identity", template_version="nuclei_safe")
+        execution_identity=ACTION_IDENTITIES["nuclei.safe_scan.v1"], template_version=ACTION_TEMPLATES["nuclei.safe_scan.v1"])
     db = GovernanceSession(action)
     target = Target(id=7, target="192.0.2.7", scope="192.0.2.7/32")
-    params = canonical_parameters(target=target.target, port=443, protocol="tcp", service="https")
+    params = canonical_parameters(target=target.target, port=443, protocol="tcp", service="https", action_id="nuclei.safe_scan.v1")
     governed = await propose_and_authorize(db, target=target, tool_name="nuclei_safe",
         parameters=params, reason="caller claimed info risk", confidence=.5,
         provider="llm", authorization_source="gade-tier-policy")
@@ -53,10 +54,10 @@ async def test_registry_tier_is_authoritative_and_tier2_auto_authorizes():
 @pytest.mark.asyncio
 async def test_tier3_requires_explicit_human_authorization():
     action = SimpleNamespace(action_id="nuclei.safe_scan.v1", validation_tier=3,
-        execution_identity="nuclei-identity", template_version="nuclei_safe")
+        execution_identity=ACTION_IDENTITIES["nuclei.safe_scan.v1"], template_version=ACTION_TEMPLATES["nuclei.safe_scan.v1"])
     db = GovernanceSession(action)
     target = Target(id=8, target="192.0.2.8", scope="192.0.2.8/32")
-    params = canonical_parameters(target=target.target, port=443, protocol="tcp", service="https")
+    params = canonical_parameters(target=target.target, port=443, protocol="tcp", service="https", action_id="nuclei.safe_scan.v1")
     governed = await propose_and_authorize(db, target=target, tool_name="nuclei_safe",
         parameters=params, reason="validation", confidence=.8, provider="decision-engine",
         authorization_source="gade-tier-policy")

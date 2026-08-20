@@ -197,6 +197,7 @@ async def generate_tool_task(
                 port=port_row.port if port_row else None,
                 protocol=port_row.protocol if port_row else None,
                 service=port_row.service if port_row else None,
+                action_id=ACTION_BY_TOOL[recommended_tool],
             )
             governed = await propose_and_authorize(
                 session,

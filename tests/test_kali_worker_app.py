@@ -49,7 +49,9 @@ def test_nuclei_worker_executes_exact_authorized_identity(monkeypatch):
     monkeypatch.setattr(worker, "run_command", lambda command: captured.setdefault("result", {
         "status": "completed", "command": " ".join(command), "raw_output": ""
     }))
-    parameters = {"port": 443, "protocol": "tcp", "service": "https", "target": "192.0.2.10"}
+    parameters = worker.canonical_parameters(worker.ExecuteRequest(
+        tool="nuclei_safe", target="192.0.2.10", port=443, protocol="tcp", service="https",
+        action_id="nuclei.safe_scan.v1"))
     body = TestClient(worker.app).post("/execute", json={
         "tool": "nuclei_safe", "target": "192.0.2.10", "port": 443,
         "protocol": "tcp", "service": "https", "action_id": "nuclei.safe_scan.v1",
@@ -58,7 +60,7 @@ def test_nuclei_worker_executes_exact_authorized_identity(monkeypatch):
         "authorization_parameters_hash": parameter_hash(parameters),
     }).json()
     assert body["status"] == "completed"
-    assert body["command"].split() == ["nuclei", "-u", "https://192.0.2.10:443", "-severity",
+    assert body["command"].split() == ["nuclei", "-u", "https://192.0.2.10:443/", "-severity",
         "critical,high", "-rl", "5", "-timeout", "5", "-retries", "0", "-no-color"]
 
 

@@ -12,6 +12,9 @@ from typing import Any
 
 from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict
+from app.action_contracts import (
+    ACTION_IDENTITIES, ACTION_BY_TOOL, canonical_action_parameters, PROTECTED_ACTION_TOOLS,
+)
 
 app = FastAPI(title="M2A Kali Worker", version="evidence-tools-v1")
 
@@ -42,15 +45,12 @@ class ExecuteRequest(BaseModel):
     authorization_parameters_hash: str | None = None
 
 
-ACTION_IDENTITIES = {
-    "http_security_headers.collect.v1": "builtin:http_security_headers:v1",
-    "nuclei.safe_scan.v1": "argv:nuclei:-u:{url}:-severity:critical,high:-rl:5:-timeout:5:-retries:0:-no-color",
-}
-
-
 def canonical_parameters(req: ExecuteRequest) -> dict[str, Any]:
-    return {"port": req.port, "protocol": req.protocol or None,
-            "service": req.service or None, "target": req.target.strip()}
+    if req.action_id is None:
+        return {"port": req.port, "protocol": req.protocol or None,
+                "service": req.service or None, "target": req.target.strip()}
+    return canonical_action_parameters(action_id=req.action_id, target=req.target, port=req.port,
+                                       protocol=req.protocol, service=req.service)
 
 
 def parameters_hash(parameters: dict[str, Any]) -> str:
@@ -60,8 +60,8 @@ def parameters_hash(parameters: dict[str, Any]) -> str:
 
 def validate_execution_identity(req: ExecuteRequest) -> str | None:
     if req.action_id is None:
-        if req.tool == "nuclei_safe":
-            return "authorization required for migrated validation action"
+        if req.tool in PROTECTED_ACTION_TOOLS:
+            return "authorization required for migrated action"
         return None
     expected_identity = ACTION_IDENTITIES.get(req.action_id)
     if expected_identity is None or expected_identity != req.execution_identity:
@@ -69,10 +69,7 @@ def validate_execution_identity(req: ExecuteRequest) -> str | None:
     parameters = canonical_parameters(req)
     if req.authorization_parameters != parameters or req.authorization_parameters_hash != parameters_hash(parameters):
         return "authorization parameter identity mismatch"
-    expected_tool = {
-        "http_security_headers.collect.v1": "http_security_headers",
-        "nuclei.safe_scan.v1": "nuclei_safe",
-    }[req.action_id]
+    expected_tool = {action: tool for tool, action in ACTION_BY_TOOL.items()}[req.action_id]
     if req.tool != expected_tool:
         return "authorized action does not match tool"
     return None
@@ -154,9 +151,9 @@ def run_httpx(target: str, port: int | None, service: str | None) -> dict[str, A
     ])
 
 
-def run_nuclei(target: str, port: int | None, service: str | None) -> dict[str, Any]:
+def run_nuclei(target: str, port: int | None, service: str | None, canonical_url: str | None = None) -> dict[str, Any]:
     return run_command([
-        "nuclei", "-u", target_url(target, port, service), "-severity",
+        "nuclei", "-u", canonical_url or target_url(target, port, service), "-severity",
         "critical,high", "-rl", "5", "-timeout", "5", "-retries", "0", "-no-color",
     ])
 
@@ -205,9 +202,10 @@ def run_tls_certificate(target: str, port: int | None) -> dict[str, Any]:
         }, success=False)
 
 
-def run_http_security_headers(target: str, port: int | None, service: str | None) -> dict[str, Any]:
+def run_http_security_headers(target: str, port: int | None, service: str | None,
+                              canonical_url: str | None = None) -> dict[str, Any]:
     selected_port = port or 80
-    url = target_url(target, selected_port, service)
+    url = (canonical_url or target_url(target, selected_port, service)).rstrip("/")
     use_tls = url.startswith("https://")
     kwargs: dict[str, Any] = {"host": target, "port": selected_port, "timeout": 10}
     if use_tls:
@@ -292,15 +290,16 @@ def execute(req: ExecuteRequest) -> dict[str, Any]:
         addresses = resolve_target(req.target)
     except (OSError, ValueError) as exc:
         return {"status": "rejected", "reason": str(exc), "tool": req.tool}
+    authorized_url = (req.authorization_parameters or {}).get("canonical_url")
     handlers = {
         "nmap_service": lambda: run_nmap(req.target),
         "httpx_basic": lambda: run_httpx(req.target, req.port, req.service),
-        "nuclei_safe": lambda: run_nuclei(req.target, req.port, req.service),
+        "nuclei_safe": lambda: run_nuclei(req.target, req.port, req.service, authorized_url),
         "dirb_safe": lambda: run_dirb(req.target, req.port, req.service),
         "ssh-enum": lambda: run_ssh_enum(req.target, req.port),
         "mysql-info": lambda: run_mysql_info(req.target, req.port),
         "tls_certificate": lambda: run_tls_certificate(req.target, req.port),
-        "http_security_headers": lambda: run_http_security_headers(req.target, req.port, req.service),
+        "http_security_headers": lambda: run_http_security_headers(req.target, req.port, req.service, authorized_url),
         "dns_metadata": lambda: run_dns_metadata(req.target, addresses),
     }
     return handlers[req.tool]()

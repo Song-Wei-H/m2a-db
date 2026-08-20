@@ -11,20 +11,22 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import DecisionProposal, ExecutionAuthorization, Target, ValidationAction
+from app.action_contracts import (ACTION_BY_TOOL, ACTION_IDENTITIES, ACTION_TEMPLATES,
+                                  canonical_action_parameters, PROTECTED_ACTION_TOOLS)
 
-ACTION_BY_TOOL = {
-    "http_security_headers": "http_security_headers.collect.v1",
-    "nuclei_safe": "nuclei.safe_scan.v1",
-}
-PROTECTED_VALIDATION_TOOLS = {"nuclei_safe"}
+PROTECTED_VALIDATION_TOOLS = PROTECTED_ACTION_TOOLS
 
 
 def utcnow_naive() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
-def canonical_parameters(*, target: str, port: int | None, protocol: str | None, service: str | None) -> dict[str, Any]:
-    return {"port": port, "protocol": protocol or None, "service": service or None, "target": target.strip()}
+def canonical_parameters(*, target: str, port: int | None, protocol: str | None, service: str | None,
+                         action_id: str | None = None) -> dict[str, Any]:
+    if action_id is None:
+        return {"port": port, "protocol": protocol or None, "service": service or None, "target": target.strip()}
+    return canonical_action_parameters(action_id=action_id, target=target, port=port,
+                                       protocol=protocol, service=service)
 
 
 def parameter_hash(parameters: dict[str, Any]) -> str:
@@ -53,8 +55,12 @@ async def propose_and_authorize(
     ).limit(1))).scalar_one_or_none()
     if action is None:
         raise ValueError(f"Validation action {action_id!r} is not enabled")
+    if (action.execution_identity != ACTION_IDENTITIES[action_id]
+            or action.template_version != ACTION_TEMPLATES[action_id]):
+        raise ValueError(f"Validation action {action_id!r} identity does not match canonical contract")
     expected = canonical_parameters(target=target.target, port=parameters.get("port"),
-                                    protocol=parameters.get("protocol"), service=parameters.get("service"))
+                                    protocol=parameters.get("protocol"), service=parameters.get("service"),
+                                    action_id=action_id)
     if expected != parameters:
         raise ValueError("Parameters are not canonical or target binding does not match")
     investigation_id = investigation_id or f"inv-{target.id}-{uuid4().hex[:16]}"
