@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
 from datetime import timedelta
 
 from sqlalchemy import delete, select
@@ -15,16 +16,21 @@ from app.tool_task_constants import NOT_REQUIRED, PENDING
 from worker.task_poller import _claim_task
 
 
-async def main() -> None:
+async def main(action: str = "tls") -> None:
     proposal_id = authorization_id = task_id = None
     try:
         async with async_session() as db, db.begin():
             target = (await db.execute(select(Target).order_by(Target.id).limit(1))).scalar_one()
-            action_id = "tls.certificate_collect.v1"
-            params = canonical_parameters(target=target.target, port=443, protocol="tcp",
-                                          service="tls", action_id=action_id)
+            action_id = ("nmap.service_fingerprint.v1" if action == "nmap"
+                         else "tls.certificate_collect.v1")
+            tool_name = "nmap_service" if action == "nmap" else "tls_certificate"
+            port = None if action == "nmap" else 443
+            protocol = None if action == "nmap" else "tcp"
+            service = None if action == "nmap" else "tls"
+            params = canonical_parameters(target=target.target, port=port, protocol=protocol,
+                                          service=service, action_id=action_id)
             proposal = DecisionProposal(
-                investigation_id="phase3-batch1-concurrency", target_id=target.id,
+                investigation_id=f"phase3-{action}-concurrency", target_id=target.id,
                 action_id=action_id, canonical_parameters=params, confidence=1.0,
                 reason="Batch 1 PostgreSQL concurrent claim validation",
                 provider="integration-test", status="authorized",
@@ -44,7 +50,7 @@ async def main() -> None:
             db.add(authorization)
             await db.flush()
             task = ToolTask(
-                target_id=target.id, tool_name="tls_certificate", status=PENDING,
+                target_id=target.id, tool_name=tool_name, status=PENDING,
                 priority=100, approval_required=False, approval_status=NOT_REQUIRED,
                 investigation_id=proposal.investigation_id, action_id=action_id,
                 execution_authorization_id=authorization.id,
@@ -64,7 +70,7 @@ async def main() -> None:
             authorization = await db.get(ExecutionAuthorization, authorization_id)
             if authorization is None or authorization.consumed_count != 1:
                 raise AssertionError("authorization was not consumed exactly once")
-        print(f"PASS TLS concurrent claims={outcomes}; consumed_count=1")
+        print(f"PASS {action} concurrent claims={outcomes}; consumed_count=1")
     finally:
         if task_id is not None:
             async with async_session() as db, db.begin():
@@ -74,4 +80,6 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--action", choices=("tls", "nmap"), default="tls")
+    asyncio.run(main(parser.parse_args().action))

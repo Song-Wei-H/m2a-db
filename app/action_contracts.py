@@ -9,6 +9,7 @@ ACTION_BY_TOOL = {
     "nuclei_safe": "nuclei.safe_scan.v1",
     "dns_metadata": "dns.metadata_collect.v1",
     "tls_certificate": "tls.certificate_collect.v1",
+    "nmap_service": "nmap.service_fingerprint.v1",
 }
 TOOL_BY_ACTION = {action: tool for tool, action in ACTION_BY_TOOL.items()}
 PROTECTED_ACTION_TOOLS = frozenset(ACTION_BY_TOOL)
@@ -29,17 +30,23 @@ TLS_IDENTITY = (
     "builtin:tls-certificate:tcp-connect:tls-client:sni={sni}:timeout=10:"
     "tls-verify=false:certificate-sha256=true:v2"
 )
+NMAP_IDENTITY = (
+    "argv:nmap:-sV:{target}:ports=default:no-script:no-port-override:"
+    "timeout=180:nmap-default-retry:v2"
+)
 ACTION_IDENTITIES = {
     "http_security_headers.collect.v1": HEADER_IDENTITY,
     "nuclei.safe_scan.v1": NUCLEI_IDENTITY,
     "dns.metadata_collect.v1": DNS_IDENTITY,
     "tls.certificate_collect.v1": TLS_IDENTITY,
+    "nmap.service_fingerprint.v1": NMAP_IDENTITY,
 }
 ACTION_TEMPLATES = {
     "http_security_headers.collect.v1": "http_security_headers_v2",
     "nuclei.safe_scan.v1": "nuclei_safe_v2",
     "dns.metadata_collect.v1": "dns_metadata_v2",
     "tls.certificate_collect.v1": "tls_certificate_v2",
+    "nmap.service_fingerprint.v1": "nmap_service_v2",
 }
 
 
@@ -85,6 +92,22 @@ def canonical_action_parameters(
             "protocol": protocol or None, "protocol_expectation": "tls",
             "service": service or None, "sni": host, "target": host,
             "timeout_seconds": 10, "tls_verify": False,
+        }
+    if action_id == "nmap.service_fingerprint.v1":
+        host = target.strip()
+        return {
+            "address": host,
+            "argv": ["nmap", "-sV", host],
+            "host_discovery": "nmap-default",
+            "port_scope": "nmap-default-no-port-override",
+            "protocol": protocol or None,
+            "requested_port": port,
+            "retry_behavior": "nmap-default",
+            "scan_type": "service-version-detection",
+            "scripts": [],
+            "service": service or None,
+            "target": host,
+            "timeout_seconds": 180,
         }
     selected_port = port or 80
     url = canonical_http_url(target=target, port=selected_port, service=service)

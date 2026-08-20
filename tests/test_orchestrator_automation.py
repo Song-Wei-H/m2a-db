@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -60,12 +60,17 @@ async def test_post_targets_creates_initial_nmap_service_tool_task():
     db.flush = AsyncMock(side_effect=flush)
     db.begin.return_value = FakeAsyncSessionContext(db)
 
-    response = await create_target(
-        TargetCreate(target="198.51.100.10", target_type="ip", scope="internal"),
-        db,
-    )
+    task = ToolTask(target_id=101, tool_name="nmap_service", status="pending",
+                    approval_required=False, approval_status="not_required",
+                    investigation_id="inv-101", action_id="nmap.service_fingerprint.v1",
+                    execution_authorization_id=301)
+    with patch("app.api.targets.create_tool_task_if_not_exists", new=AsyncMock(return_value=(task, True))) as writer:
+        response = await create_target(
+            TargetCreate(target="198.51.100.10", target_type="ip", scope="internal"),
+            db,
+        )
 
-    task = next(row for row in added if isinstance(row, ToolTask))
+    assert writer.await_args.kwargs["tool_name"] == "nmap_service"
     assert response.target_id == 101
     assert response.scan_run_id == 201
     assert response.status == "pending"
@@ -74,6 +79,8 @@ async def test_post_targets_creates_initial_nmap_service_tool_task():
     assert task.status == "pending"
     assert task.approval_required is False
     assert task.approval_status == "not_required"
+    assert task.action_id == "nmap.service_fingerprint.v1"
+    assert task.execution_authorization_id == 301
     assert not hasattr(task, "command")
 
 

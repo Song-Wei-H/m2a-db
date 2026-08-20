@@ -55,6 +55,7 @@ async def test_registry_tier_is_authoritative_and_tier2_auto_authorizes():
 @pytest.mark.parametrize(("tool_name", "action_id", "tier", "port", "service"), [
     ("dns_metadata", "dns.metadata_collect.v1", 0, None, "dns"),
     ("tls_certificate", "tls.certificate_collect.v1", 1, 443, "tls"),
+    ("nmap_service", "nmap.service_fingerprint.v1", 1, None, None),
 ])
 async def test_batch1_registry_tier_is_authoritative_and_auto_authorizes(
     tool_name, action_id, tier, port, service,
