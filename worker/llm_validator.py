@@ -18,6 +18,8 @@ ALLOWED_TOOLS = {
     "tls_certificate",
     "http_security_headers",
     "dns_metadata",
+    "ssh-enum",
+    "mysql-info",
 }
 
 

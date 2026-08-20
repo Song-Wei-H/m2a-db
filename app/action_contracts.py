@@ -11,6 +11,8 @@ ACTION_BY_TOOL = {
     "tls_certificate": "tls.certificate_collect.v1",
     "nmap_service": "nmap.service_fingerprint.v1",
     "httpx_basic": "httpx.web_probe.v1",
+    "ssh-enum": "ssh.algorithms_enum.v1",
+    "mysql-info": "mysql.server_info.v1",
 }
 TOOL_BY_ACTION = {action: tool for tool, action in ACTION_BY_TOOL.items()}
 PROTECTED_ACTION_TOOLS = frozenset(ACTION_BY_TOOL)
@@ -39,6 +41,14 @@ HTTPX_IDENTITY = (
     "argv:httpx:-u:{canonical_url}:-json:-title:-tech-detect:-status-code:"
     "method=probe:path=/:redirect=false:retry=httpx-default:timeout=180:v2"
 )
+SSH_IDENTITY = (
+    "argv:nmap:--script:ssh2-enum-algos:-p:{port}:{target}:"
+    "algorithm-enumeration-only:timeout=180:nmap-default-retry:v2"
+)
+MYSQL_IDENTITY = (
+    "argv:nmap:--script:mysql-info:-p:{port}:{target}:"
+    "server-info-only:no-auth:timeout=180:nmap-default-retry:v2"
+)
 ACTION_IDENTITIES = {
     "http_security_headers.collect.v1": HEADER_IDENTITY,
     "nuclei.safe_scan.v1": NUCLEI_IDENTITY,
@@ -46,6 +56,8 @@ ACTION_IDENTITIES = {
     "tls.certificate_collect.v1": TLS_IDENTITY,
     "nmap.service_fingerprint.v1": NMAP_IDENTITY,
     "httpx.web_probe.v1": HTTPX_IDENTITY,
+    "ssh.algorithms_enum.v1": SSH_IDENTITY,
+    "mysql.server_info.v1": MYSQL_IDENTITY,
 }
 ACTION_TEMPLATES = {
     "http_security_headers.collect.v1": "http_security_headers_v2",
@@ -54,6 +66,8 @@ ACTION_TEMPLATES = {
     "tls.certificate_collect.v1": "tls_certificate_v2",
     "nmap.service_fingerprint.v1": "nmap_service_v2",
     "httpx.web_probe.v1": "httpx_web_probe_v2",
+    "ssh.algorithms_enum.v1": "ssh_algorithms_enum_v2",
+    "mysql.server_info.v1": "mysql_server_info_v2",
 }
 
 
@@ -134,6 +148,33 @@ def canonical_action_parameters(
             },
             "retry_behavior": "httpx-default",
             "scheme": url.split(":", 1)[0],
+            "service": service or None,
+            "target": host,
+            "timeout_seconds": 180,
+        }
+    if action_id in {"ssh.algorithms_enum.v1", "mysql.server_info.v1"}:
+        host = target.strip()
+        service_name = (service or "").strip().lower()
+        is_ssh = service_name == "ssh" or port == 22
+        is_mysql = service_name in {"mysql", "mariadb"} or port == 3306
+        if action_id == "ssh.algorithms_enum.v1":
+            if not is_ssh or is_mysql:
+                raise ValueError("ssh action is not applicable to the supplied service evidence")
+            selected_port, script, purpose = port or 22, "ssh2-enum-algos", "algorithm-enumeration-only"
+        else:
+            if not is_mysql or is_ssh:
+                raise ValueError("mysql action is not applicable to the supplied service evidence")
+            selected_port, script, purpose = port or 3306, "mysql-info", "server-info-only"
+        return {
+            "argv": ["nmap", "--script", script, "-p", str(selected_port), host],
+            "authentication": "none",
+            "host": host,
+            "port": selected_port,
+            "protocol": protocol or None,
+            "retry_behavior": "nmap-default",
+            "scan_type": purpose,
+            "script": script,
+            "scripts": [script],
             "service": service or None,
             "target": host,
             "timeout_seconds": 180,

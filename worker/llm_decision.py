@@ -47,7 +47,7 @@ Output JSON only.
 Required schema:
 {
   "recommended_action": "stop|continue|verify|remediate",
-  "recommended_tool": "nmap_service|httpx_basic|nuclei_safe|dirb_safe|tls_certificate|http_security_headers|dns_metadata|null",
+  "recommended_tool": "nmap_service|httpx_basic|nuclei_safe|dirb_safe|ssh-enum|mysql-info|tls_certificate|http_security_headers|dns_metadata|null",
   "confidence": 0.0,
   "reasoning": ["reason1", "reason2"]
 }

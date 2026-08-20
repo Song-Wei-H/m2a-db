@@ -25,6 +25,8 @@ async def main(action: str = "tls") -> None:
                 "tls": ("tls.certificate_collect.v1", "tls_certificate", 443, "tcp", "tls"),
                 "nmap": ("nmap.service_fingerprint.v1", "nmap_service", None, None, None),
                 "httpx": ("httpx.web_probe.v1", "httpx_basic", 80, "tcp", "http"),
+                "ssh": ("ssh.algorithms_enum.v1", "ssh-enum", 22, "tcp", "ssh"),
+                "mysql": ("mysql.server_info.v1", "mysql-info", 3306, "tcp", "mysql"),
             }
             action_id, tool_name, port, protocol, service = config[action]
             params = canonical_parameters(target=target.target, port=port, protocol=protocol,
@@ -81,5 +83,5 @@ async def main(action: str = "tls") -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--action", choices=("tls", "nmap", "httpx"), default="tls")
+    parser.add_argument("--action", choices=("tls", "nmap", "httpx", "ssh", "mysql"), default="tls")
     asyncio.run(main(parser.parse_args().action))

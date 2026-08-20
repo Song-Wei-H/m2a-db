@@ -57,6 +57,8 @@ async def test_registry_tier_is_authoritative_and_tier2_auto_authorizes():
     ("tls_certificate", "tls.certificate_collect.v1", 1, 443, "tls"),
     ("nmap_service", "nmap.service_fingerprint.v1", 1, None, None),
     ("httpx_basic", "httpx.web_probe.v1", 1, 80, "http"),
+    ("ssh-enum", "ssh.algorithms_enum.v1", 1, 22, "ssh"),
+    ("mysql-info", "mysql.server_info.v1", 1, 3306, "mysql"),
 ])
 async def test_batch1_registry_tier_is_authoritative_and_auto_authorizes(
     tool_name, action_id, tier, port, service,

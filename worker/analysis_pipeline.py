@@ -205,13 +205,27 @@ def _score_open_port(port: OpenPort) -> dict[str, Any]:
         return {
             "risk_score": 2.0,
             "confidence": 0.75,
-            "next_action": "stop",
-            "next_tool": None,
+            "next_action": "continue",
+            "next_tool": "ssh-enum",
             "mitre_phase": "Lateral Movement",
             "mitre_technique": "T1021",
             "reason": (
                 f"SSH service detected on port "
-                f"{port.port}/{port.protocol}; ssh-enum is currently disabled."
+                f"{port.port}/{port.protocol}; bounded SSH algorithm enumeration."
+            ),
+        }
+
+    if service in {"mysql", "mariadb"} or port.port == 3306:
+        return {
+            "risk_score": 2.0,
+            "confidence": 0.75,
+            "next_action": "continue",
+            "next_tool": "mysql-info",
+            "mitre_phase": "Discovery",
+            "mitre_technique": "T1046",
+            "reason": (
+                f"MySQL service detected on port {port.port}/{port.protocol}; "
+                "bounded server-information enumeration."
             ),
         }
 
