@@ -7,12 +7,13 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session
-from app.models import OpenPort, Target, ToolResult, ToolTask, ToolRegistry, CommandTemplate
+from app.execution_governance import PROTECTED_VALIDATION_TOOLS, canonical_parameters, parameter_hash, utcnow_naive
+from app.models import CommandTemplate, ExecutionAuthorization, OpenPort, Target, ToolResult, ToolTask, ToolRegistry
 from app.tool_task_constants import (
     EXECUTABLE_APPROVAL_STATUSES,
     FAILED,
@@ -40,14 +41,27 @@ class TaskSnapshot:
     tool_name: str
     approval_required: bool
     approval_status: str
+    investigation_id: str | None = None
+    action_id: str | None = None
 
 
 async def fetch_pending_tasks(db: AsyncSession, limit: int = 10) -> list[ToolTask]:
     stmt = (
         select(ToolTask)
+        .outerjoin(ExecutionAuthorization, ToolTask.execution_authorization_id == ExecutionAuthorization.id)
         .where(
             ToolTask.status == PENDING,
             ToolTask.approval_status.in_(EXECUTABLE_APPROVAL_STATUSES),
+            or_(
+                and_(
+                    ToolTask.execution_authorization_id.is_(None),
+                    ToolTask.tool_name.notin_(PROTECTED_VALIDATION_TOOLS),
+                ),
+                and_(
+                    ExecutionAuthorization.expires_at > utcnow_naive(),
+                    ExecutionAuthorization.consumed_count < ExecutionAuthorization.execution_limit,
+                ),
+            ),
         )
         .order_by(ToolTask.priority.desc(), ToolTask.id)
         .limit(limit)
@@ -58,6 +72,27 @@ async def fetch_pending_tasks(db: AsyncSession, limit: int = 10) -> list[ToolTas
 
 
 async def _claim_task(db: AsyncSession, task_id: int) -> bool:
+    try:
+        task = await db.get(ToolTask, task_id, with_for_update=True)
+    except TypeError:  # compatibility for lightweight test/session adapters
+        task = await db.get(ToolTask, task_id)
+    if task is None or task.status != PENDING or task.approval_status not in EXECUTABLE_APPROVAL_STATUSES:
+        return False
+    authorization_id = getattr(task, "execution_authorization_id", None)
+    task_action_id = getattr(task, "action_id", None)
+    if task.tool_name in PROTECTED_VALIDATION_TOOLS or authorization_id is not None:
+        if authorization_id is None or not task_action_id:
+            return False
+        authorization = await db.get(ExecutionAuthorization, authorization_id, with_for_update=True)
+        if (
+            authorization is None
+            or authorization.target_id != task.target_id
+            or authorization.action_id != task_action_id
+            or authorization.expires_at <= utcnow_naive()
+            or authorization.consumed_count >= authorization.execution_limit
+        ):
+            return False
+        authorization.consumed_count += 1
     result = await db.execute(
         update(ToolTask)
         .where(
@@ -90,6 +125,11 @@ async def _load_task_context(db: AsyncSession, task: ToolTask) -> TaskContext:
         service=port_row.service if port_row else None,
         open_port_id=task.open_port_id,
         decision_score_id=task.decision_score_id,
+        investigation_id=getattr(task, "investigation_id", None),
+        action_id=getattr(task, "action_id", None),
+        execution_identity=None,
+        authorization_parameters=None,
+        authorization_parameters_hash=None,
     )
 
 
@@ -100,6 +140,8 @@ async def _persist_result(db: AsyncSession, ctx: TaskContext, outcome) -> int:
         target_id=ctx.target_id,
         open_port_id=ctx.open_port_id,
         tool_task_id=ctx.task_id,
+        investigation_id=ctx.investigation_id,
+        action_id=ctx.action_id,
         tool_name=ctx.tool_name,
         command=outcome.command,
         raw_output=outcome.raw_output,
@@ -218,6 +260,8 @@ async def _fail_task(
             target_id=snapshot.target_id,
             open_port_id=snapshot.open_port_id,
             tool_task_id=snapshot.id,
+            investigation_id=snapshot.investigation_id,
+            action_id=snapshot.action_id,
             tool_name=snapshot.tool_name,
             command=command,
             raw_output=reason,
@@ -267,6 +311,8 @@ async def execute_task(task_id: int) -> None:
             tool_name=task.tool_name,
             approval_required=task.approval_required,
             approval_status=task.approval_status,
+            investigation_id=getattr(task, "investigation_id", None),
+            action_id=getattr(task, "action_id", None),
         )
         await db.execute(
             update(Target)
@@ -309,12 +355,36 @@ async def execute_task(task_id: int) -> None:
             logger.warning("tool_task_id=%s rejected: %s", task.id, exc)
             return
 
+        authorization = None
+        if getattr(task, "execution_authorization_id", None) is not None:
+            authorization = await db.get(ExecutionAuthorization, task.execution_authorization_id)
+            actual_parameters = canonical_parameters(
+                target=ctx.host, port=ctx.port, protocol=ctx.protocol, service=ctx.service
+            )
+            if (
+                authorization is None
+                or authorization.canonical_parameters != actual_parameters
+                or authorization.parameters_hash != parameter_hash(actual_parameters)
+            ):
+                await db.execute(update(ToolTask).where(ToolTask.id == task.id).values(
+                    **tool_task_status_values(RUNNING, REJECTED, reject_reason="Authorization parameter identity mismatch")
+                ))
+                return
+            ctx = TaskContext(
+                **{**ctx.__dict__, "execution_identity": authorization.execution_identity,
+                   "authorization_parameters": authorization.canonical_parameters,
+                   "authorization_parameters_hash": authorization.parameters_hash}
+            )
+
+        template_conditions = [
+            CommandTemplate.tool_name == ctx.tool_name,
+            CommandTemplate.enabled.is_(True),
+        ]
+        if authorization is not None:
+            template_conditions.append(CommandTemplate.template_id == authorization.template_version)
         stmt = (
             select(CommandTemplate)
-            .where(
-                CommandTemplate.tool_name == ctx.tool_name,
-                CommandTemplate.enabled.is_(True),
-            )
+            .where(*template_conditions)
             .limit(1)
         )
         template_row = (await db.execute(stmt)).scalar_one_or_none()
@@ -426,10 +496,16 @@ async def poll_target_once(target_id: int) -> int:
     async with async_session() as db, db.begin():
         stmt = (
             select(ToolTask)
+            .outerjoin(ExecutionAuthorization, ToolTask.execution_authorization_id == ExecutionAuthorization.id)
             .where(
                 ToolTask.target_id == target_id,
                 ToolTask.status == PENDING,
                 ToolTask.approval_status.in_(EXECUTABLE_APPROVAL_STATUSES),
+                or_(
+                    and_(ToolTask.execution_authorization_id.is_(None), ToolTask.tool_name.notin_(PROTECTED_VALIDATION_TOOLS)),
+                    and_(ExecutionAuthorization.expires_at > utcnow_naive(),
+                         ExecutionAuthorization.consumed_count < ExecutionAuthorization.execution_limit),
+                ),
             )
             .order_by(ToolTask.priority.desc(), ToolTask.id)
             .limit(10)

@@ -15,7 +15,8 @@ from typing import Any
 from sqlalchemy import select
 
 from app.database import async_session
-from app.models import ToolRegistry, ToolTask
+from app.execution_governance import ACTION_BY_TOOL, canonical_parameters, propose_and_authorize
+from app.models import OpenPort, Target, ToolRegistry, ToolTask
 from app.tool_task_constants import ACTIVE_TASK_STATUSES, NOT_REQUIRED, PENDING, PENDING_APPROVAL
 from app.tool_task_writer import create_tool_task_if_not_exists
 from worker.tool_name_normalizer import TOOL_ALIASES
@@ -185,6 +186,38 @@ async def generate_tool_task(
 
 
     async with async_session() as session, session.begin():
+        governed = None
+        if recommended_tool in ACTION_BY_TOOL:
+            target_row = await session.get(Target, target_id)
+            if target_row is None:
+                raise ValueError(f"target_id={target_id} not found")
+            port_row = await session.get(OpenPort, open_port_id) if open_port_id else None
+            parameters = canonical_parameters(
+                target=target_row.target,
+                port=port_row.port if port_row else None,
+                protocol=port_row.protocol if port_row else None,
+                service=port_row.service if port_row else None,
+            )
+            governed = await propose_and_authorize(
+                session,
+                target=target_row,
+                tool_name=recommended_tool,
+                parameters=parameters,
+                reason=approval_reason or "Decision provider selected validation action",
+                confidence=decision_result.get("confidence"),
+                provider=str(decision_result.get("provider") or "decision-engine"),
+                authorization_source="gade-tier-policy",
+                investigation_id=decision_result.get("investigation_id"),
+            )
+            if governed.authorization is None:
+                return {
+                    "action": "decision_proposal_created",
+                    "tool_task_id": None,
+                    "proposal_id": governed.proposal.id,
+                    "status": "pending_human_approval",
+                }
+            approval_required = False
+            approval_status = NOT_REQUIRED
         task, inserted = await create_tool_task_if_not_exists(
             session,
             target_id=target_id,
@@ -198,6 +231,9 @@ async def generate_tool_task(
             approval_required=approval_required,
             approval_status=approval_status,
             approval_reason=approval_reason or None,
+            investigation_id=governed.proposal.investigation_id if governed else None,
+            action_id=governed.action.action_id if governed else None,
+            execution_authorization_id=governed.authorization.id if governed and governed.authorization else None,
         )
         task_id = task.id if task else None
         if not inserted:

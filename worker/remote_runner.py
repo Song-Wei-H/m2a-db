@@ -17,6 +17,10 @@ async def run_remote_tool(ctx: TaskContext) -> ToolRunOutcome:
         "port": ctx.port,
         "protocol": ctx.protocol,
         "service": ctx.service,
+        "action_id": ctx.action_id,
+        "execution_identity": ctx.execution_identity,
+        "authorization_parameters": ctx.authorization_parameters,
+        "authorization_parameters_hash": ctx.authorization_parameters_hash,
     }
 
     async with httpx.AsyncClient(

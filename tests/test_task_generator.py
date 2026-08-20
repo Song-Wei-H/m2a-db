@@ -156,7 +156,7 @@ async def test_failed_task_recreation():
                 target_id=1,
                 open_port_id=104,
                 decision_result={
-                    "recommended_tool": "nuclei",
+                    "recommended_tool": "httpx_basic",
                     "recommended_action": "continue"
                 }
             )
@@ -200,7 +200,7 @@ async def test_depth_tool_created_with_pending_approval_status():
                 target_id=1,
                 open_port_id=104,
                 decision_result={
-                    "recommended_tool": "nuclei",
+                    "recommended_tool": "dirb_safe",
                     "recommended_action": "verify",
                     "requires_approval": True,
                 },

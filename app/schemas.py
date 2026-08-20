@@ -87,6 +87,8 @@ class ReportOpenPortResponse(BaseModel):
 
 
 class ReportToolResultResponse(BaseModel):
+    investigation_id: str | None = None
+    action_id: str | None = None
     tool_name: str | None = None
     success: bool | None = None
     evidence_type: str | None = None

@@ -164,6 +164,8 @@ class ToolResult(Base):
     scan_run_id: Mapped[int | None] = mapped_column(Integer)
     open_port_id: Mapped[int | None] = mapped_column(Integer)
     tool_task_id: Mapped[int | None] = mapped_column(Integer)
+    investigation_id: Mapped[str | None] = mapped_column(String(100))
+    action_id: Mapped[str | None] = mapped_column(String(150))
     tool_name: Mapped[str | None] = mapped_column(String(100))
     command: Mapped[str | None] = mapped_column(Text)
     raw_output: Mapped[str | None] = mapped_column(Text)
@@ -222,6 +224,11 @@ class ToolTask(Base):
     open_port_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tool_run: Mapped[str | None] = mapped_column(String(100), nullable=True)
     decision_score_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    investigation_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    action_id: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    execution_authorization_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("execution_authorizations.id"), nullable=True
+    )
 
 class AutoLoopDecision(Base):
     __tablename__ = "auto_loop_decisions"
@@ -344,6 +351,56 @@ class PortCveMatch(Base):
         DateTime(timezone=False),
         server_default=func.now(),
     )
+
+
+class ValidationAction(Base):
+    __tablename__ = "validation_actions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    action_id: Mapped[str] = mapped_column(String(150), unique=True, nullable=False, index=True)
+    tool_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    phase: Mapped[str] = mapped_column(String(50), nullable=False)
+    validation_tier: Mapped[int] = mapped_column(Integer, nullable=False)
+    execution_identity: Mapped[str] = mapped_column(String(255), nullable=False)
+    template_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    parameter_schema: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), server_default=func.now())
+
+
+class DecisionProposal(Base):
+    __tablename__ = "decision_proposals"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    target_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    action_id: Mapped[str] = mapped_column(String(150), nullable=False)
+    canonical_parameters: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, server_default="proposed")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), server_default=func.now())
+
+
+class ExecutionAuthorization(Base):
+    __tablename__ = "execution_authorizations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    proposal_id: Mapped[int] = mapped_column(Integer, ForeignKey("decision_proposals.id"), nullable=False)
+    investigation_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    target_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    action_id: Mapped[str] = mapped_column(String(150), nullable=False)
+    canonical_parameters: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    parameters_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    execution_identity: Mapped[str] = mapped_column(String(255), nullable=False)
+    template_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    validation_tier: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(String(255), nullable=False)
+    execution_limit: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    consumed_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+    authorization_source: Mapped[str] = mapped_column(String(100), nullable=False)
+    human_approved_by: Mapped[str | None] = mapped_column(String(255))
+    human_approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), server_default=func.now())
 
 
 class TargetCveMatch(Base):

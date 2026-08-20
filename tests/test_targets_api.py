@@ -95,6 +95,8 @@ def test_get_target_tool_results_uses_report_generator_slice():
     assert response.status_code == 200
     assert response.json() == [
         {
+            "investigation_id": None,
+            "action_id": None,
             "tool_name": "httpx",
             "success": True,
             "evidence_type": "http_service",

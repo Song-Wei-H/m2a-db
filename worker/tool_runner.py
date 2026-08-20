@@ -34,6 +34,11 @@ class TaskContext:
     service: str | None
     open_port_id: int | None
     decision_score_id: int | None = None
+    investigation_id: str | None = None
+    action_id: str | None = None
+    execution_identity: str | None = None
+    authorization_parameters: dict | None = None
+    authorization_parameters_hash: str | None = None
 
 
 @dataclass

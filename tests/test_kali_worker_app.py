@@ -1,4 +1,5 @@
 import socket
+from app.execution_governance import parameter_hash
 
 from fastapi.testclient import TestClient
 
@@ -32,3 +33,44 @@ def test_unknown_tool_is_rejected_before_resolution(monkeypatch):
         "/execute", json={"tool": "arbitrary_shell", "target": "192.0.2.10"}
     ).json()
     assert body == {"status": "rejected", "reason": "tool not allowed", "tool": "arbitrary_shell"}
+
+
+def test_migrated_nuclei_requires_authorized_execution_identity():
+    body = TestClient(worker.app).post(
+        "/execute", json={"tool": "nuclei_safe", "target": "192.0.2.10"}
+    ).json()
+    assert body["status"] == "rejected"
+    assert "authorization required" in body["reason"]
+
+
+def test_nuclei_worker_executes_exact_authorized_identity(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(worker, "resolve_target", lambda target: [target])
+    monkeypatch.setattr(worker, "run_command", lambda command: captured.setdefault("result", {
+        "status": "completed", "command": " ".join(command), "raw_output": ""
+    }))
+    parameters = {"port": 443, "protocol": "tcp", "service": "https", "target": "192.0.2.10"}
+    body = TestClient(worker.app).post("/execute", json={
+        "tool": "nuclei_safe", "target": "192.0.2.10", "port": 443,
+        "protocol": "tcp", "service": "https", "action_id": "nuclei.safe_scan.v1",
+        "execution_identity": worker.ACTION_IDENTITIES["nuclei.safe_scan.v1"],
+        "authorization_parameters": parameters,
+        "authorization_parameters_hash": parameter_hash(parameters),
+    }).json()
+    assert body["status"] == "completed"
+    assert body["command"].split() == ["nuclei", "-u", "https://192.0.2.10:443", "-severity",
+        "critical,high", "-rl", "5", "-timeout", "5", "-retries", "0", "-no-color"]
+
+
+def test_worker_rejects_parameter_or_action_substitution(monkeypatch):
+    monkeypatch.setattr(worker, "resolve_target", lambda target: [target])
+    parameters = {"port": 443, "protocol": "tcp", "service": "https", "target": "192.0.2.11"}
+    body = TestClient(worker.app).post("/execute", json={
+        "tool": "nuclei_safe", "target": "192.0.2.10", "port": 443,
+        "protocol": "tcp", "service": "https", "action_id": "nuclei.safe_scan.v1",
+        "execution_identity": worker.ACTION_IDENTITIES["nuclei.safe_scan.v1"],
+        "authorization_parameters": parameters,
+        "authorization_parameters_hash": parameter_hash(parameters),
+    }).json()
+    assert body["status"] == "rejected"
+    assert "parameter identity mismatch" in body["reason"]

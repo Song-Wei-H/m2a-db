@@ -36,6 +36,46 @@ class ExecuteRequest(BaseModel):
     port: int | None = None
     protocol: str | None = None
     service: str | None = None
+    action_id: str | None = None
+    execution_identity: str | None = None
+    authorization_parameters: dict[str, Any] | None = None
+    authorization_parameters_hash: str | None = None
+
+
+ACTION_IDENTITIES = {
+    "http_security_headers.collect.v1": "builtin:http_security_headers:v1",
+    "nuclei.safe_scan.v1": "argv:nuclei:-u:{url}:-severity:critical,high:-rl:5:-timeout:5:-retries:0:-no-color",
+}
+
+
+def canonical_parameters(req: ExecuteRequest) -> dict[str, Any]:
+    return {"port": req.port, "protocol": req.protocol or None,
+            "service": req.service or None, "target": req.target.strip()}
+
+
+def parameters_hash(parameters: dict[str, Any]) -> str:
+    payload = json.dumps(parameters, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def validate_execution_identity(req: ExecuteRequest) -> str | None:
+    if req.action_id is None:
+        if req.tool == "nuclei_safe":
+            return "authorization required for migrated validation action"
+        return None
+    expected_identity = ACTION_IDENTITIES.get(req.action_id)
+    if expected_identity is None or expected_identity != req.execution_identity:
+        return "execution identity mismatch"
+    parameters = canonical_parameters(req)
+    if req.authorization_parameters != parameters or req.authorization_parameters_hash != parameters_hash(parameters):
+        return "authorization parameter identity mismatch"
+    expected_tool = {
+        "http_security_headers.collect.v1": "http_security_headers",
+        "nuclei.safe_scan.v1": "nuclei_safe",
+    }[req.action_id]
+    if req.tool != expected_tool:
+        return "authorized action does not match tool"
+    return None
 
 
 def resolved_addresses(target: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
@@ -117,7 +157,7 @@ def run_httpx(target: str, port: int | None, service: str | None) -> dict[str, A
 def run_nuclei(target: str, port: int | None, service: str | None) -> dict[str, Any]:
     return run_command([
         "nuclei", "-u", target_url(target, port, service), "-severity",
-        "critical,high,medium", "-no-color",
+        "critical,high", "-rl", "5", "-timeout", "5", "-retries", "0", "-no-color",
     ])
 
 
@@ -245,6 +285,9 @@ def health() -> dict[str, Any]:
 def execute(req: ExecuteRequest) -> dict[str, Any]:
     if req.tool not in ALLOWED_TOOLS:
         return {"status": "rejected", "reason": "tool not allowed", "tool": req.tool}
+    identity_error = validate_execution_identity(req)
+    if identity_error:
+        return {"status": "rejected", "reason": identity_error, "tool": req.tool}
     try:
         addresses = resolve_target(req.target)
     except (OSError, ValueError) as exc:

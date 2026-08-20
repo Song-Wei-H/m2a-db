@@ -60,6 +60,11 @@ from `scan_runs`.
   validated by `app/tool_task_state.py`.
 - Worker polling claims only pending tasks whose approval status is
   `not_required` or `approved`.
+- `nuclei.safe_scan.v1` additionally requires a registry-derived, target- and
+  parameter-bound ExecutionAuthorization. Claim atomically consumes its
+  single execution; LLM/caller risk does not control the authoritative tier.
+- `http_security_headers.collect.v1` carries the same action/execution identity
+  lineage as the discovery half of the Phase 2 P0 vertical slice.
 - Tool execution remains constrained by tool policy, command templates, scope
   validation, approval gates, and `shell=False` local execution.
 - Remote worker `command` values are stored only as audit data and are not

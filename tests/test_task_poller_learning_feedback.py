@@ -129,8 +129,12 @@ async def test_execute_task_remote_timeout_marks_failed_and_writes_tool_result()
         open_port_id=17,
         decision_score_id=52,
         tool_name="httpx_basic",
+        status="pending",
         approval_required=False,
         approval_status="not_required",
+        execution_authorization_id=None,
+        investigation_id=None,
+        action_id=None,
     )
     target = SimpleNamespace(id=14, target="198.51.100.13")
     open_port = SimpleNamespace(id=17, port=443, protocol="tcp", service="ssl/http")

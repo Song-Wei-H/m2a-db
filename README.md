@@ -152,6 +152,9 @@ Get-Content -Raw .\initdb\025_normalized_results_schema_alignment.sql |
 
 Get-Content -Raw .\initdb\026_remote_evidence_tools.sql |
   docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
+
+Get-Content -Raw .\initdb\027_execution_authorization.sql |
+  docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
 ```
 
 若 API 報告 `column tool_tasks.approved_at does not exist`，代表既有 volume 漏套 021；先執行 021，再執行 024。
@@ -164,6 +167,12 @@ Get-Content -Raw .\initdb\026_remote_evidence_tools.sql |
 docker exec m2a-postgres psql -U m2a_user -d m2a_pentest -c `
   "SELECT column_name FROM information_schema.columns WHERE table_name='tool_tasks' AND column_name IN ('proposal_reason','approval_decision_reason');"
 ```
+
+Migration 027 adds the P0 authorization-first vertical slice. It registers
+`http_security_headers.collect.v1` (Tier 1) and `nuclei.safe_scan.v1` (Tier 2),
+adds DecisionProposal/ExecutionAuthorization lineage, and never converts
+historical approvals into authorizations. `nuclei_safe` without a valid,
+unexpired, unconsumed authorization is not executable.
 
 ## 5. 每次啟動 SOP
 

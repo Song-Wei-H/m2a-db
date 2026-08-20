@@ -13,7 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models import Target, ToolRegistry, ToolRequest
+from app.execution_governance import ACTION_BY_TOOL, canonical_parameters, propose_and_authorize
+from app.models import OpenPort, Target, ToolRegistry, ToolRequest
 from app.security.llm_schema import LlmToolProposal
 from app.security.tool_policy import (
     parse_llm_payload,
@@ -182,11 +183,6 @@ async def dispatch_llm_tool_proposal(
     # Validate profile against target scope
     validate_profile(profile, target_row.scope if target_row else None)
 
-    # Determine approval fields
-    approval_required, approval_status, approval_reason = _determine_approval_from_risk_level(
-        template_tool, proposal.risk_level
-    )
-
     # Create ToolTask
     # ToolRegistry lookup
     reg_stmt = select(ToolRegistry).where(ToolRegistry.tool_name == template_tool).limit(1)
@@ -223,6 +219,36 @@ async def dispatch_llm_tool_proposal(
             status="pending_tool_request",
             message="Tool not registered; request created" if reg_row is None else "Tool disabled; request created",
         )
+    # Vertical-slice actions are authorized from the registry tier. The caller's
+    # risk_level may affect queue priority only; it is never an authorization input.
+    governed = None
+    if template_tool in ACTION_BY_TOOL:
+        port_row = await db.get(OpenPort, open_port_id) if open_port_id else None
+        parameters = canonical_parameters(
+            target=target_row.target,
+            port=port_row.port if port_row else None,
+            protocol=port_row.protocol if port_row else None,
+            service=port_row.service if port_row else None,
+        )
+        governed = await propose_and_authorize(
+            db,
+            target=target_row,
+            tool_name=template_tool,
+            parameters=parameters,
+            reason=proposal.reason,
+            confidence=None,
+            provider="llm-proposal",
+            authorization_source="gade-tier-policy",
+        )
+        if governed.authorization is None:
+            return DispatchResult(False, None, "pending_human_approval", "Human authorization required", proposal)
+
+    approval_required, approval_status, approval_reason = _determine_approval_from_risk_level(
+        template_tool, proposal.risk_level
+    )
+    if governed is not None:
+        approval_required, approval_status, approval_reason = False, NOT_REQUIRED, None
+
     # Continue normal creation
     task, inserted = await create_tool_task_if_not_exists(
         db,
@@ -235,6 +261,9 @@ async def dispatch_llm_tool_proposal(
         approval_status=approval_status,
         approval_reason=approval_reason,
         proposal_reason=proposal.reason,
+        investigation_id=governed.proposal.investigation_id if governed else None,
+        action_id=governed.action.action_id if governed else None,
+        execution_authorization_id=governed.authorization.id if governed and governed.authorization else None,
     )
     if not inserted:
         return DispatchResult(

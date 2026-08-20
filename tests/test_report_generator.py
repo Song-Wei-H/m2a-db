@@ -79,6 +79,8 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
         scan_run_id=201,
         open_port_id=101,
         tool_task_id=401,
+        investigation_id="inv-historical",
+        action_id="httpx.legacy",
         tool_name="httpx",
         success=True,
         command="httpx -u https://example.com",
@@ -91,11 +93,14 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
     tool_task = row(
         id=401,
         tool_name="httpx",
-        status="completed",
+        status="pending",
         priority=3,
         open_port_id=101,
         tool_run="run-1",
         decision_score_id=501,
+        investigation_id="inv-current",
+        action_id="nuclei.safe_scan.v1",
+        execution_authorization_id=None,
         approval_status="not_required",
         approval_required=False,
         approval_reason=None,
@@ -223,7 +228,10 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
     assert [ref["authority"] for ref in report["open_ports"][0]["matched_cves"][0]["evidence_references"]] == ["NIST NVD", "CVE Program", "FIRST EPSS"]
     assert report["open_ports"][0]["matched_cves"][0]["evidence_references"][0]["url"].endswith("CVE-2024-NGINX-0001")
     assert report["tool_results"][0]["tool_name"] == "httpx"
+    assert report["tool_results"][0]["investigation_id"] == "inv-historical"
     assert report["tool_tasks"][0]["tool_run"] == "run-1"
+    assert report["tool_tasks"][0]["investigation_id"] == "inv-current"
+    assert report["tool_tasks"][0]["lineage_state"] == "current_pending"
     assert report["decision_scores"][0]["risk_score"] == 8.5
     assert report["mitre_mapping"] == [
         {

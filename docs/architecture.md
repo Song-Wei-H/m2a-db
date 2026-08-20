@@ -57,6 +57,19 @@ Target
 `ToolTask` is the runtime execution unit. The worker only fetches executable
 tasks and must respect status, approval, scope, and command template rules.
 
+For the Phase 2 P0 vertical slice, validation execution is authorization-first:
+
+```text
+DecisionProposal -> ValidationAction -> ExecutionAuthorization -> ToolTask -> Worker -> ToolResult
+```
+
+The action registry, not caller/LLM risk, owns the tier. The initial actions are
+`http_security_headers.collect.v1` (Tier 1) and `nuclei.safe_scan.v1` (Tier 2).
+The authorization binds target, canonical parameters, execution identity,
+template version, scope, expiry, and a single execution. Claim consumes that
+authorization in the same database transaction. Other tools remain on the
+legacy path and are pending migration.
+
 ## Governance Subsystem
 
 Primary modules:
@@ -67,6 +80,7 @@ Primary modules:
 - `app/routers/approval.py`
 - `app/tool_catalog.py`
 - `app/tool_task_dispatcher.py`
+- `app/execution_governance.py`
 - `worker/safety.py`
 - `worker/command_templates.py`
 - `worker/task_generator.py`
@@ -80,6 +94,8 @@ Governance responsibilities:
 - enforce approval gates for depth or higher-risk tasks
 - prevent duplicate active ToolTasks
 - enforce ToolTask status transitions
+- reject migrated validation actions without a valid ExecutionAuthorization
+- atomically prevent authorization replay
 - record stop reasons through `auto_loop_decisions`
 
 The current architecture treats governance as part of the execution contract,
