@@ -60,11 +60,17 @@ from `scan_runs`.
   validated by `app/tool_task_state.py`.
 - Worker polling claims only pending tasks whose approval status is
   `not_required` or `approved`.
-- `nuclei.safe_scan.v1` additionally requires a registry-derived, target- and
-  parameter-bound ExecutionAuthorization. Claim atomically consumes its
-  single execution; LLM/caller risk does not control the authoritative tier.
-- `http_security_headers.collect.v1` carries the same action/execution identity
-  lineage as the discovery half of the Phase 2 P0 vertical slice.
+- Eight actions use the Registry-derived authorization-first path:
+  `http_security_headers.collect.v1`, `nuclei.safe_scan.v1`,
+  `dns.metadata_collect.v1`, `tls.certificate_collect.v1`,
+  `nmap.service_fingerprint.v1`, `httpx.web_probe.v1`,
+  `ssh.algorithms_enum.v1`, and `mysql.server_info.v1`.
+- Their ExecutionAuthorization binds target, canonical parameters and hash,
+  execution identity, template version, scope, expiry, and one execution.
+  Claim atomically consumes that execution; caller/LLM risk cannot override
+  the Registry tier. Historical approvals are not converted into grants.
+- `dirb_safe` remains an explicitly legacy, unmigrated ninth allowlisted tool.
+  It is not part of the eight-action authorization-first coverage.
 - Tool execution remains constrained by tool policy, command templates, scope
   validation, approval gates, and `shell=False` local execution.
 - Remote worker `command` values are stored only as audit data and are not
@@ -123,8 +129,22 @@ Key routes:
 - `POST /approvals/{task_id}/approve`
 - `POST /approvals/{task_id}/reject`
 
+ExecutionAuthorization has no public grant-creation endpoint. It is an internal
+server-side governance artifact derived from a proposal, Registry contract,
+policy, and any required approval; clients and LLMs cannot mint it directly.
+
 ## Remaining Work
 
+- Decide a separately governed Batch 5 contract for `dirb_safe` before counting
+  it as authorization-first; define its bounded wordlist, request/rate ceiling,
+  timeout, canonical URL, and exact execution identity.
+- Add authenticated Worker callers or signed grants; current execution identity
+  and parameter-hash binding is a consistency control, not cryptographic caller
+  authentication.
+- Add resolved-destination pinning where deployment NDR/microsegmentation is
+  not the authority for target reachability.
+- Add API authentication/RBAC before treating approval actor fields as trusted
+  production identities.
 - Collect enough real historical `round_learning_labels` for reliable offline
   model experiments.
 - Validate dataset quality and label distribution on real assessment runs.

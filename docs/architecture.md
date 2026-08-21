@@ -57,18 +57,37 @@ Target
 `ToolTask` is the runtime execution unit. The worker only fetches executable
 tasks and must respect status, approval, scope, and command template rules.
 
-For the Phase 2 P0 vertical slice, validation execution is authorization-first:
+For the completed Phase 3 Batch 0–4 scope, execution is authorization-first:
 
 ```text
 DecisionProposal -> ValidationAction -> ExecutionAuthorization -> ToolTask -> Worker -> ToolResult
 ```
 
-The action registry, not caller/LLM risk, owns the tier. The initial actions are
-`http_security_headers.collect.v1` (Tier 1) and `nuclei.safe_scan.v1` (Tier 2).
-The authorization binds target, canonical parameters, execution identity,
-template version, scope, expiry, and a single execution. Claim consumes that
-authorization in the same database transaction. Other tools remain on the
-legacy path and are pending migration.
+The action registry, not caller/LLM risk, owns the tier. The authoritative set is:
+
+| Tool | Action | Tier |
+|---|---|---:|
+| `dns_metadata` | `dns.metadata_collect.v1` | 0 |
+| `http_security_headers` | `http_security_headers.collect.v1` | 1 |
+| `tls_certificate` | `tls.certificate_collect.v1` | 1 |
+| `nmap_service` | `nmap.service_fingerprint.v1` | 1 |
+| `httpx_basic` | `httpx.web_probe.v1` | 1 |
+| `ssh-enum` | `ssh.algorithms_enum.v1` | 1 |
+| `mysql-info` | `mysql.server_info.v1` | 1 |
+| `nuclei_safe` | `nuclei.safe_scan.v1` | 2 |
+
+The authorization binds target, canonical parameters and parameter hash,
+execution identity, template version, scope, expiry, and a single execution.
+The poller locks the task and consumes that authorization in the same database
+transaction. The remote runner forwards the action contract; Worker
+reconstructs canonical parameters and rejects identity/hash mismatch.
+`dirb_safe` remains an explicitly legacy, unmigrated tool and is not part of
+this eight-action coverage.
+
+These bindings provide execution-contract consistency, not cryptographic
+authentication. Authenticated Worker callers or signed grants, resolved-IP
+scope pinning when network controls are not authoritative, and API RBAC remain
+deployment/security work.
 
 ## Governance Subsystem
 
@@ -94,7 +113,7 @@ Governance responsibilities:
 - enforce approval gates for depth or higher-risk tasks
 - prevent duplicate active ToolTasks
 - enforce ToolTask status transitions
-- reject migrated validation actions without a valid ExecutionAuthorization
+- reject migrated actions without a valid ExecutionAuthorization
 - atomically prevent authorization replay
 - record stop reasons through `auto_loop_decisions`
 

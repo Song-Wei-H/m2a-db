@@ -1,24 +1,14 @@
 # Phase 3 Validation Registry / Tier Migration Matrix
 
-> Batch 0 was implemented and validated on 2026-08-20. See
-> `PHASE3_BATCH0_COMPLETION.md`. This matrix remains the audit authority for
-> later batches; no Batch 1 migration is implied.
-
-> Batch 1 was implemented and validated on 2026-08-20 for
-> `dns.metadata_collect.v1` and `tls.certificate_collect.v1`. See
-> `PHASE3_BATCH1_COMPLETION.md`. No Batch 2 migration is implied.
-
-> Batch 2 was implemented and validated on 2026-08-20 for
-> `nmap.service_fingerprint.v1`. See `PHASE3_BATCH2_COMPLETION.md`. No Batch 3
-> migration is implied.
-
-> Batch 3 was implemented and validated on 2026-08-20 for
-> `httpx.web_probe.v1`. See `PHASE3_BATCH3_COMPLETION.md`. No Batch 4 migration
-> is implied.
+> Phase 3 Batches 0–4 were implemented and validated on 2026-08-20 through
+> migrations 028–032. See `PHASE3_BATCH0_COMPLETION.md` through
+> `PHASE3_BATCH3_COMPLETION.md`; Batch 4 is covered by migration 032 and
+> `tests/test_phase3_batch4_contract.py`. This matrix is now the completion and
+> residual-gap record. Batch 5 (`dirb_safe`) has not been approved or migrated.
 
 Baseline: `5317aef` (`feat: add authorization-first governance slice`)
 
-Status: audit and migration proposal only. No action migration is authorized by this document.
+Status: Batches 0–4 complete; eight actions are authorization-first. Batch 5 remains a separate human decision.
 
 ## Authority rules
 
@@ -26,83 +16,75 @@ Status: audit and migration proposal only. No action migration is authorized by 
 - Caller/LLM `risk_level` may influence presentation or queue priority only.
 - A migrated action is complete only when Registry action, template/version, canonical parameters, M2A authorization, and Worker execution identity describe the same operation.
 - Historical approval is not ExecutionAuthorization and must not be promoted automatically.
-- Unknown or mismatched identity fails closed. No Tier 3 action is proposed without evidence of an existing operation that requires it.
+- Unknown or mismatched identity fails closed. No Tier 3 action is claimed without evidence of an existing operation and explicit human-authorization semantics.
+- ExecutionAuthorization is server-internal. No public API allows a client or LLM to mint an execution grant.
 
 ## Action inventory and migration matrix
 
-| Tool | Proposed action ID | Phase | Tier | Authoritative tier rationale | Template / canonical parameters | Worker actual execution identity | Current state and legacy path |
-|---|---|---|---:|---|---|---|---|
-| `dns_metadata` | `dns.metadata_collect.v1` | Discovery | 0 | Bounded observational DNS metadata; no content mutation or broad enumeration | Current `dns_metadata_v1` is symbolic `remote-evidence {target}`. Canonical: target; runtime-derived resolved addresses must be recorded as output, not caller parameters. Proposed identity: `builtin:dns_metadata:v1`. | Resolve A/AAAA, optional PTR, `getfqdn`; no subprocess. Worker resolves target before handler. | Not registered as an action. LLM/dispatcher can create a legacy executable ToolTask. No historical tasks in live DB. |
-| `nmap_service` | `nmap.service_fingerprint.v1` | Discovery | 1 | Active service/version probing of one authorized target | Existing `nmap_service`: `nmap -sV {target}`; canonical: target. Existing template and Worker argv match for IP/host target. | `argv:nmap:-sV:{target}` | Largest legacy surface: target creation, retest, scan-run dispatcher and other decision paths create ToolTask directly. Live DB: 53 tasks, 3 pending, none action-bound. |
-| `httpx_basic` | `httpx.web_probe.v1` | Discovery | 1 | Active HTTP request, redirects and technology/title collection | Existing template hardcodes `http://{target}:{port}` and omits `-json`; canonical should be target, port, service and derived URL. Requires a new versioned template rather than silent reuse. | `httpx -u {derived_url} -json -title -tech-detect -status-code -follow-redirects` | Risk/analysis pipeline can create direct not-required ToolTask; dispatcher/task generator are not action-bound. Live DB: 48 canonical plus one historical alias task. |
-| `tls_certificate` | `tls.certificate_collect.v1` | Discovery | 1 | One active TLS handshake; bounded but network-active | Current `tls_certificate_v1` is generic `remote-evidence {target} {port}`. Canonical: target and port; service/protocol may be context only. Replace or version symbolic template as `builtin:tls_certificate:v1`. | TCP connect, TLS client handshake, SNI target, timeout 10, `CERT_NONE`, certificate SHA-256 and negotiated metadata; no subprocess. | Not action-bound. Reachable through proposal/decision paths. No historical tasks in live DB. |
-| `http_security_headers` | `http_security_headers.collect.v1` | Discovery | 1 | One active HTTP HEAD request with no body/redirect; bounded network effect | Registry exists, but `http_security_headers_v1` is generic `remote-evidence`; canonical authorization has target, port, protocol, service. Strict Phase 3 equality requires a versioned builtin template/identity contract. | `builtin:http_security_headers:v1`: HEAD `/`, fixed user-agent, no redirect/body, timeout 10, TLS verification disabled for collection. | Partially migrated. Dispatcher/task generator create authorization, but direct Decision/LLM ToolTask paths can create unbound tasks and Worker does not globally require authorization for this discovery tool. No live historical tasks. |
-| `ssh-enum` | `ssh.algorithms_enum.v1` | Discovery | 1 | Active protocol metadata enumeration; bounded NSE script | Existing template fixes port 22 and uses `{{host}}`; canonical should be target and selected port. Requires version bump. | `nmap --script ssh2-enum-algos -p {port-or-22} {target}` | Analysis pipeline can create direct not-required task. LLM validator does not expose it, but generic dispatcher/config can. Live DB: 3 tasks, none action-bound. |
-| `mysql-info` | `mysql.server_info.v1` | Discovery | 1 | Active server metadata enumeration; bounded NSE script | Existing template fixes port 3306 and uses `{{host}}`; canonical should be target and selected port. Requires version bump. | `nmap --script mysql-info -p {port-or-3306} {target}` | Analysis pipeline can create direct not-required task. LLM validator does not expose it, but generic dispatcher/config can. No active tasks; historical rows are unbound. |
-| `nuclei_safe` | `nuclei.safe_scan.v1` | Validation | 2 | Active template-based vulnerability validation, bounded to critical/high with rate/timeout/retry controls | Registry exists. Flags match template `nuclei_safe`, but DB endpoint is `{{host}}` while Worker derives scheme/port URL from target, port and service. Strict equality therefore remains partial; create a canonical versioned URL template/renderer or make the builtin execution contract the explicit template authority. | `nuclei -u {derived_url} -severity critical,high -rl 5 -timeout 5 -retries 0 -no-color` with action/identity/parameter-hash verification. | Worker globally requires authorization, so all legacy nuclei tasks fail closed. Direct Decision and LLM paths can still create proposal-like ToolTasks, but they cannot execute. Live DB: 18 historical, one approved/pending legacy task, zero authorizations. |
-| `dirb_safe` | `dirb.content_discovery.v1` | Validation | 2 | Active, potentially high-request-volume content enumeration; policy-controlled automatic authorization with optional escalation | Existing template hardcodes `http://{host}` and omits dynamic port/TLS; canonical should be target, port, service and derived URL. Requires a versioned bounded identity, timeout and explicit wordlist/default contract. | `dirb {derived_url}` under Worker process timeout 180; current handler has no action identity or action-specific rate/request ceiling. | Fully legacy. Auto-loop and LLM/decision paths create pending-approval ToolTask; approval makes it executable without ExecutionAuthorization. Live DB: 4 historical tasks. |
+| Tool | Action ID | Tier | Template version | Current state |
+|---|---|---:|---|---|
+| `dns_metadata` | `dns.metadata_collect.v1` | 0 | `dns_metadata_v2` | Migrated; bounded builtin DNS metadata contract |
+| `http_security_headers` | `http_security_headers.collect.v1` | 1 | `http_security_headers_v2` | Migrated; bounded HEAD-only builtin contract |
+| `tls_certificate` | `tls.certificate_collect.v1` | 1 | `tls_certificate_v2` | Migrated; bounded TLS handshake contract |
+| `nmap_service` | `nmap.service_fingerprint.v1` | 1 | `nmap_service_v2` | Migrated; fixed `nmap -sV` identity |
+| `httpx_basic` | `httpx.web_probe.v1` | 1 | `httpx_web_probe_v2` | Migrated; canonical URL and fixed probe identity |
+| `ssh-enum` | `ssh.algorithms_enum.v1` | 1 | `ssh_algorithms_enum_v2` | Migrated; exact bounded NSE identity |
+| `mysql-info` | `mysql.server_info.v1` | 1 | `mysql_server_info_v2` | Migrated; exact no-auth metadata identity |
+| `nuclei_safe` | `nuclei.safe_scan.v1` | 2 | `nuclei_safe_v2` | Migrated; bounded severity/rate/timeout identity |
+| `dirb_safe` | `dirb.content_discovery.v1` (candidate) | 2 (candidate) | Not defined | Legacy/unmigrated; not part of authorization-first coverage |
 
 Aliases `httpx`, `nuclei`, and `dirb` are input normalization aliases, not separate executable actions. Historical alias rows remain provenance and must not be rewritten.
 
-## Current creation/bypass inventory
+## Current creation and enforcement inventory
 
-| Path | Current behavior | Migration requirement |
+| Path | Current behavior | Residual requirement |
 |---|---|---|
-| `POST /targets` | Direct `nmap_service` ToolTask, no action/auth | Route through deterministic Tier 1 governance without changing target transaction semantics. |
-| target retest API | Direct human-requested nmap ToolTask | Preserve human reason; issue fresh bounded authorization, never reuse prior one. |
-| `scan_run_dispatcher.py` | Legacy direct nmap creation | Migrate or retire after proving no active deployment depends on it. |
-| nmap analysis pipeline | Direct `httpx_basic`, `ssh-enum`, `mysql-info`, or `nuclei_safe` ToolTask | Replace direct writer with proposal/governance service; nuclei already fails closed at Worker. |
-| auto-loop `generate_tool_task` | Registry path only for current two actions; other tools remain legacy | Expand `ACTION_BY_TOOL` in small batches and prohibit fallback for each migrated action. |
-| `/tools/llm-propose` | Current two actions use registry tier; remaining tools use caller risk/legacy approval | For each migrated action, ignore caller risk for authorization and reject unknown action/tool combinations. |
-| manual Decision Engine | Direct ToolTask; vulnerability risk/confidence controls approval | Convert selected action to DecisionProposal; action tier comes only from Registry/policy. |
-| approved LLM recommendation generator | Direct pending-approval ToolTask for any accepted recommendation | Convert recommendation approval into proposal evidence, not execution authorization; governance resolves action/tier. |
-| Worker poller | Requires authorization globally only for `nuclei_safe` or already-bound tasks | Add each migrated action to fail-closed enforcement atomically with its creation-path migration. |
-| Kali Worker `/execute` | Requires identity for nuclei and requests carrying action ID; other tools accept legacy tool-only requests | Add exact action/tool/identity/parameter checks per migration batch; retain legacy only for explicitly unmigrated actions. |
+| `POST /targets`, retest, `scan_run_dispatcher.py` | Shared ToolTask writer adapts migrated nmap work through Registry governance | Keep transactional and duplicate-prevention regressions covered. |
+| Analysis, Decision, auto-loop and recommendation paths | Migrated tools converge on shared writer/dispatcher governance; Registry tier is authoritative | Do not reintroduce direct migrated-tool creation bypasses. |
+| `/tools/llm-propose` | Accepts a schema-bound proposal; server resolves action/tier and creates internal authorization when policy allows | Do not add a client-mintable grant endpoint. |
+| Worker poller | Every `PROTECTED_ACTION_TOOLS` task requires a matching, valid, unconsumed authorization; claim is atomic | Keep real PostgreSQL replay/concurrency coverage. |
+| Kali Worker `/execute` | Reconstructs migrated action parameters and rejects action/tool/identity/hash mismatch | Add cryptographic caller/grant authentication separately. |
+| `dirb_safe` | Remains on the explicitly unmigrated legacy path | Requires a separately approved bounded Batch 5 contract. |
 
-## Migration order
+The execution identity and parameter hash bind components to one deterministic
+contract, but they are not a cryptographic authentication mechanism. Worker
+caller authentication or signed grants, resolved-IP scope pinning outside
+NDR-controlled deployments, and API authentication/RBAC remain separate gaps.
 
-### Batch 0 — close strict-identity gaps in the existing slice
+## Migration completion ledger
 
-1. Version the symbolic builtin contract for `http_security_headers.collect.v1`.
-2. Make every header creation path action-bound or fail closed at Worker/poller.
-3. Resolve nuclei endpoint-template identity (`{{host}}` versus derived URL) without redesigning ExecutionAuthorization.
-4. Add a static test that every registered action resolves to exactly one enabled template and one Worker identity.
+### Batch 0 — completed by migration 028
 
-### Batch 1 — bounded collectors
+- `http_security_headers.collect.v1`
+- `nuclei.safe_scan.v1`
+
+### Batch 1 — completed by migration 029
 
 - `dns.metadata_collect.v1`
 - `tls.certificate_collect.v1`
 
-Reason: deterministic builtins, bounded network effects, no current historical task pressure and small routing surface.
-
-### Batch 2 — nmap baseline alone
+### Batch 2 — completed by migration 030
 
 - `nmap.service_fingerprint.v1`
 
-Reason: simple identity but the widest creation surface and three live pending tasks. Preserve deterministic target/retest behavior and do not synthesize authorization for those pending rows.
-
-### Batch 3 — HTTP probe alone
+### Batch 3 — completed by migration 031
 
 - `httpx.web_probe.v1`
 
-Reason: central auto-loop dependency and URL derivation/template drift require isolated compatibility testing.
-
-### Batch 4 — protocol metadata pair
+### Batch 4 — completed by migration 032
 
 - `ssh.algorithms_enum.v1`
 - `mysql.server_info.v1`
 
-Reason: same bounded nmap-script pattern and same dynamic-port template correction.
-
-### Batch 5 — directory validation alone
+### Batch 5 — not approved or migrated
 
 - `dirb.content_discovery.v1`
 
-Reason: highest remaining request-volume and governance uncertainty. Define bounded wordlist, request/timeout ceiling and escalation policy before enabling authorization-first execution.
+Reason: highest remaining request-volume and governance uncertainty. Define a
+bounded wordlist, request/rate ceiling, timeout, canonical URL, exact execution
+identity, and escalation policy before enabling authorization-first execution.
 
-No Tier 3 batch is proposed. A future Tier 3 action requires evidence of an actual registered capability and explicit human-authorization semantics.
-
-## Tests required for every batch
+## Tests required for every migrated batch
 
 1. Registry action resolves to one enabled template/version and one exact Worker execution identity.
 2. Canonical target/port/service/protocol representation is deterministic; substitutions are rejected.
@@ -115,11 +97,9 @@ No Tier 3 batch is proposed. A future Tier 3 action requires evidence of an actu
 9. Existing Risk, Learning, MITRE, Normalizer, CVE enrichment and report contracts pass regression.
 10. Migration is additive/idempotent and creates no authorization for historical approval/task rows.
 
-## Human decision gate
+## Remaining human decision gate
 
-- Reason: strict Phase 3 equality exposes partial identity gaps in both currently registered actions and multiple executable legacy paths.
-- Recommendation: approve Batch 0 first, then approve one migration batch at a time in the order above.
-- Alternative: migrate nmap first; rejected as initial order because it has the broadest creation surface and live pending tasks.
-- Impact: migrated tools become fail-closed without authorization; historical pending work may remain visible but non-executable.
-- Risk: deploying Registry rows before all creation and Worker paths are switched can cause either bypass or unintended execution stalls.
-- Requested decision: approve, revise, or reject Batch 0. No implementation begins from this matrix alone.
+- Reason: `dirb_safe` has the highest remaining request-volume and governance uncertainty.
+- Required contract before migration: bounded wordlist, request/rate ceiling, timeout, canonical URL, exact execution identity, escalation policy, and regression tests.
+- Current decision: keep it explicitly legacy and exclude it from the eight-action authorization-first claim.
+- Requested future decision: approve, revise, or reject a separately evidenced Batch 5 proposal. No Batch 5 implementation is authorized by this record.

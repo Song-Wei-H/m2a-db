@@ -158,6 +158,21 @@ Get-Content -Raw .\initdb\026_remote_evidence_tools.sql |
 
 Get-Content -Raw .\initdb\027_execution_authorization.sql |
   docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
+
+Get-Content -Raw .\initdb\028_phase3_batch0_identity.sql |
+  docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
+
+Get-Content -Raw .\initdb\029_phase3_batch1_dns_tls_identity.sql |
+  docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
+
+Get-Content -Raw .\initdb\030_phase3_batch2_nmap_identity.sql |
+  docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
+
+Get-Content -Raw .\initdb\031_phase3_batch3_httpx_identity.sql |
+  docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
+
+Get-Content -Raw .\initdb\032_phase3_batch4_ssh_mysql_identity.sql |
+  docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
 ```
 
 若 API 報告 `column tool_tasks.approved_at does not exist`，代表既有 volume 漏套 021；先執行 021，再執行 024。
@@ -171,11 +186,15 @@ docker exec m2a-postgres psql -U m2a_user -d m2a_pentest -c `
   "SELECT column_name FROM information_schema.columns WHERE table_name='tool_tasks' AND column_name IN ('proposal_reason','approval_decision_reason');"
 ```
 
-Migration 027 adds the P0 authorization-first vertical slice. It registers
-`http_security_headers.collect.v1` (Tier 1) and `nuclei.safe_scan.v1` (Tier 2),
-adds DecisionProposal/ExecutionAuthorization lineage, and never converts
-historical approvals into authorizations. `nuclei_safe` without a valid,
-unexpired, unconsumed authorization is not executable.
+Migration 027 建立 authorization-first 基礎；028–032 完成 Phase 3 Batch 0–4。
+目前 8 個 action 由 Registry 決定 tier、template version 與 execution
+identity：`http_security_headers`、`nuclei_safe`、`dns_metadata`、
+`tls_certificate`、`nmap_service`、`httpx_basic`、`ssh-enum`、`mysql-info`。
+其 ExecutionAuthorization 綁定 target、canonical parameters、parameter
+hash、execution identity、template version、scope、expiry 與單次 execution，
+Worker claim 在同一資料庫交易中消耗 authorization。歷史 approval 不會被
+轉換成 authorization。`dirb_safe` 仍是明確的 legacy／未遷移工具，不得算入
+8-action authorization-first coverage。
 
 ## 5. 每次啟動 SOP
 
@@ -324,6 +343,11 @@ pnpm.cmd build
 | GET | `/approvals/pending` | 待人工核准任務與上下文 |
 | POST | `/approvals/{task_id}/approve` | 核准並保存理由 |
 | POST | `/approvals/{task_id}/reject` | 拒絕並保存理由 |
+
+`ExecutionAuthorization` 是 M2A 伺服器內部治理產物，不提供讓 client／LLM
+直接建立 grant 的公開 endpoint。外部決策器只能透過 `/tools/llm-propose`
+提交結構化提案；M2A 再依 Registry、policy 與 approval 狀態建立或拒絕
+authorization，caller 提供的 risk 值不能降低 Registry tier。
 
 提案範例：
 
