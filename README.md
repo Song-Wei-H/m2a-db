@@ -82,6 +82,9 @@ Kali Worker 需安裝 Repository 的 Python dependencies，以及實際允許使
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+Set-Location .\frontend
+pnpm.cmd install
+Set-Location ..
 ```
 
 ### 4.2 建立 `.env`
@@ -181,6 +184,17 @@ Windows Launcher 可將本節的手動啟動流程整合為單一入口；設定
 ```powershell
 .\.venv\Scripts\python.exe -m m2a_launcher.main
 ```
+
+Repository 只版本化 Launcher 原始碼與可重現建置腳本，不提交 EXE。需要 Windows 執行檔時，依 Launcher 文件建置；輸出位置是 `dist/M2A-Launcher/M2A-Launcher.exe`，不是 `m2a.exe`。執行檔應留在完整 Repository／部署目錄中，不能只複製單一 EXE，因為 Launcher 仍需使用 `docker-compose.yml`、`app/`、`frontend/`、`scripts/` 與 `.venv/`。
+
+遠端 Kali 請在 Launcher 選單選擇「Worker 設定」→「Remote Kali」，或在 `.env` 設定：
+
+```env
+M2A_WORKER_MODE=remote
+M2A_REMOTE_WORKER_URL=http://<Kali-內網-IP>:8000
+```
+
+Remote Worker 必須已在 Kali 上啟動，且 Windows 能取得其 `/health`；Remote 模式不會呼叫 WSL。
 
 請開四個終端，順序如下。
 
@@ -380,11 +394,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-api.ps1
 
 ## 12. 證據與成熟度
 
-截至基準 commit `4e3e71f` 與其後本機文件修訂，後端自動測試為 303 passed，前端 production build 成功；本機既有 PostgreSQL 已補套 021 與 024。唯讀控制面 smoke test 成功讀取 OpenAPI、Dashboard（22 個既有 Target）及 Approval Center（1 個待核准項目）。Worker 未啟動，該待核准項目未執行。這些是程式與本機驗證證據，不等於正式 GADE 研究結果、Kali 跨主機驗證或生產安全認證。
+目前功能分支的自動驗證涵蓋後端、Launcher、CVE correlation／validation／report 與前端 production build。精確測試結果應以該 commit 的 CI 或本機測試輸出為準，不在 README 固定保存容易過期的 passed 數量。本機 smoke test、資料庫 migration 與遠端 Kali 工具執行結果只代表執行當下的環境，不等於正式 GADE 研究結果或生產安全認證。
 
 詳細資料：
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/architecture.md`](docs/architecture.md)
 - [`docs/SYSTEM_WORKFLOW.md`](docs/SYSTEM_WORKFLOW.md)
 - [`docs/CAPABILITY_AUDIT_2026-08-13.md`](docs/CAPABILITY_AUDIT_2026-08-13.md)
 - [`docs/RESEARCH_POSITIONING.md`](docs/RESEARCH_POSITIONING.md)

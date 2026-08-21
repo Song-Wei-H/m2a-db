@@ -23,8 +23,8 @@ class Settings(BaseSettings):
     allowed_domain_suffixes: str = ""
     allowed_llm_profiles: str = "internal"
     allowed_tools: str = default_allowed_tools_value()
-    llm_base_url: str = "http://10.56.67.11/v1"
-    llm_model: str = "openai/qwen3-4b-thinking-2507-heretic"
+    llm_base_url: str = "http://192.0.2.20:8000/v1"
+    llm_model: str = "openai/replace-with-model-name"
     llm_api_key: str | None = None
     llm_send_auth: bool = False
     llm_timeout_seconds: float = 60.0

@@ -44,8 +44,8 @@ def configure_llm(root: Path, input_fn: Input = input, secret_fn: SecretInput = 
             print("[錯誤] API Key 不可為空。")
             return False
 
-    model_current = values.get("LLM_MODEL", "openai/qwen3-4b-thinking-2507-heretic")
-    base_current = values.get("LLM_BASE_URL", "http://10.56.67.11/v1")
+    model_current = values.get("LLM_MODEL", "openai/replace-with-model-name")
+    base_current = values.get("LLM_BASE_URL", "http://192.0.2.20:8000/v1")
     model = input_fn(f"Model [{model_current}]：").strip() or model_current
     base_url = input_fn(f"API Base URL [{base_current}]：").strip() or base_current
     send_auth_current = values.get("LLM_SEND_AUTH", "false").lower() in {"1", "true", "yes", "on"}

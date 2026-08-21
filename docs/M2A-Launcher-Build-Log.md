@@ -86,3 +86,12 @@
 - 目的：讓使用者能看見 Docker／WSL／Backend 啟動錯誤，不因 Console 關閉而誤認閃退。
 - 修改：`m2a_launcher/main.py` 加入 error pause 與 EOF-safe menu handling；新增兩個 regression tests。
 - 結果：focused 27 passed；PyInstaller 6.22.2 rebuild PASS；互動與非互動 EXE smoke PASS。
+
+## 2026-08-21 — GitHub 檔案與 README 訂正
+
+- 目的：核對遠端功能分支的檔案、README、Launcher 文件、設定範例與可重現建置說明。
+- 訂正：補齊前端依賴安裝、Remote Kali 設定、EXE 輸出／忽略規則與 onedir 部署限制；修正 GitHub 大小寫敏感的 architecture link；移除 README 中容易過期的固定測試數量。
+- 設定安全：將 Repository 中部署專屬的 LLM IP／model 預設值改為 RFC 5737 文件保留位址與明確 placeholder；本機 `.env` 未修改。
+- 驗證：所有 Git-tracked Markdown local links PASS；focused pytest 29 passed；完整 pytest 443 passed；Frontend production build PASS（2287 modules transformed）；`git diff --check` PASS。
+- 環境事件：首次 focused pytest 因 Windows 系統 Temp 權限產生 17 errors；改用 Repository 內唯一隔離 `--basetemp` 後全部通過，確認不是產品 regression。
+- 成功：是；遠端 Kali runtime 與外部 LLM connectivity 本輪未執行。

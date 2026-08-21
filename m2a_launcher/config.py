@@ -85,8 +85,8 @@ class LauncherConfig:
             auto_open_browser=_bool(value("M2A_AUTO_OPEN_BROWSER", "true"), True),
             debug=_bool(value("M2A_LAUNCHER_DEBUG", "false"), False),
             llm_api_key=value("LLM_API_KEY", ""),
-            llm_model=value("LLM_MODEL", "openai/qwen3-4b-thinking-2507-heretic"),
-            llm_base_url=value("LLM_BASE_URL", "http://10.56.67.11/v1"),
+            llm_model=value("LLM_MODEL", "openai/replace-with-model-name"),
+            llm_base_url=value("LLM_BASE_URL", "http://192.0.2.20:8000/v1"),
             llm_send_auth=_bool(value("LLM_SEND_AUTH", "false"), False),
         )
         if config.worker_mode == "remote" and not config.remote_worker_url:

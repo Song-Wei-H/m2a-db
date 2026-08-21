@@ -20,6 +20,15 @@ Frontend 目前仍是獨立 Vite process；Repository 尚未建立由 FastAPI �
 
 Launcher 沿用 Repository 根目錄 `.env`。設定範例見 `.env.example`。`M2A_WORKER_MODE=wsl` 會使用 `wsl.exe -d <distro> -- bash -lc ...` 啟動 Worker；`remote` 不啟動 WSL，只檢查 `M2A_REMOTE_WORKER_URL/health`。所有等待時間都有 timeout。
 
+遠端 Kali 範例：
+
+```env
+M2A_WORKER_MODE=remote
+M2A_REMOTE_WORKER_URL=http://192.0.2.10:8000
+```
+
+請將文件保留位址替換為已授權 Lab 中的 Kali 內網位址，並先在 Kali 啟動 Remote Worker。Remote 模式不會透過 SSH 部署程式，也不會自行啟動遠端服務。
+
 `M2A_WSL_WORKER_DIR` 必須是 WSL 中含本 Repository 與 `.venv` 的目錄。Launcher 不會自動安裝 WSL、Kali Linux、Python 或安全工具。
 
 `M2A_LAUNCHER_DEBUG=false` 只顯示簡潔中文事件；設為 `true` 顯示 PID、URL、Worker Mode、WSL Distro 與 HTTP status 等技術資訊。Log 位於 `logs/launcher-YYYYMMDD.log`，UTF-8 編碼，命令中的 password、token、API key 與 Authorization 會遮罩。
@@ -50,6 +59,8 @@ PyInstaller 是 release build dependency，不加入 M2A runtime requirements；
 ```
 
 輸出為 `dist/M2A-Launcher/M2A-Launcher.exe`（`--onedir`）。不使用 `--onefile`、runtime executable extraction、encoded command、安全產品排除或 bypass。正式企業 release 應使用可信任憑證進行 Authenticode Code Signing；本 Repository 不建立自簽或偽造憑證。
+
+`dist/` 與 EXE 刻意由 Git 忽略；GitHub 儲存的是原始碼與建置方式，而不是未簽章 binary。請保留完整 `dist/M2A-Launcher/` onedir 內容，並從 Repository／部署根目錄啟動；不能只搬移單一 EXE，因為 Launcher 仍需存取專案檔案、Python 環境及前端依賴。
 
 ## 測試與疑難排解
 
