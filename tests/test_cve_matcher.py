@@ -140,7 +140,8 @@ async def test_product_only_cpe_is_candidate_with_capped_confidence():
     assert inserted.match_type == "cpe_product_only"
     assert inserted.match_confidence <= 0.6
     assert inserted.version is None
-    assert "version unknown" in matches[0]["reason"]
+    assert "version unresolved" in matches[0]["reason"]
+    assert "not vulnerability confidence" in matches[0]["reason"]
 
 
 @pytest.mark.asyncio

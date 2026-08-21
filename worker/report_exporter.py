@@ -235,15 +235,20 @@ class ReportExporter:
             )
             _append_pdf_table(
                 story,
-                "CVE 候選項目 - 需要版本驗證",
-                ["CVE", "CVSS", "證據層級", "候選狀態", "信心", "官方引用"],
+                "CVE 候選項目（Top 5）",
+                ["CVE", "產品", "產品信心", "版本狀態", "CVSS", "EPSS", "KEV", "驗證優先度", "狀態", "決策", "證據"],
                 [
                     [
                         row.get("cve_id") or row.get("cve"),
+                        row.get("product"),
+                        row.get("product_identity_confidence"),
+                        row.get("version_status"),
                         row.get("cvss_score") if row.get("cvss_score") is not None else row.get("cvss"),
-                        row.get("evidence_level"),
-                        row.get("finding_status"),
-                        row.get("match_confidence"),
+                        row.get("epss"),
+                        row.get("kev"),
+                        row.get("validation_priority_score"),
+                        row.get("validation_status"),
+                        row.get("validation_decision"),
                         "\n".join(str(ref.get("url")) for ref in row.get("evidence_references", []) if ref.get("url")),
                     ]
                     for row in report.get("matched_cves", [])

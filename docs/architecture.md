@@ -228,8 +228,8 @@ Not implemented as runtime capabilities:
 Every `matched_cves` report item includes claim-scoped provenance generated from its canonical CVE ID:
 
 - `evidence_level`: `SOURCE_CLAIM` when target version is unknown; `TECHNICAL_ANALYSIS` when product/version applicability was observed.
-- `finding_status`: remains `HIGH_PRIORITY_CANDIDATE`; a match is never automatically promoted to a confirmed vulnerability.
-- `validation_status`: `NOT_TESTED` or `OBSERVED`.
+- `finding_status`: `HIGH_VALIDATION_PRIORITY` only for governed Top-N selection, otherwise `CVE_CANDIDATE`; neither is a confirmed vulnerability.
+- `validation_status`: distinguishes `VERSION_UNRESOLVED`, `VERSION_APPLICABLE`, `VALIDATION_PENDING`, `DEFERRED`, `VALIDATED`, `NOT_VALIDATED`, and `NOT_APPLICABLE`.
 - `target_evidence`: observed product/version, port reference, match type/reason and match timestamp.
 - `evidence_references`: official NIST NVD and CVE Program URLs, plus FIRST EPSS when a score exists and CISA KEV when membership is asserted. Each reference declares the claim it supports.
 

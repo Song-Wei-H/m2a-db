@@ -39,7 +39,7 @@ export function DecisionCenter() {
       {decisionGroups.length ? (
         decisionGroups.map(({ decision, index, report }) => (
           <div className="space-y-3" key={`${report.target_summary.target_id}-${index}`}>
-            <DecisionCard decision={decision} index={index} />
+            <DecisionCard decision={decision} index={index} toolTasks={report.tool_tasks} />
             <div className="grid gap-3 xl:grid-cols-3">
               <EvidenceCard title="決策軌跡" data={decision} />
               <EvidenceCard title="先驗學習" data={report.learning_ranking_summary ?? report.learning_feedback_summary} />

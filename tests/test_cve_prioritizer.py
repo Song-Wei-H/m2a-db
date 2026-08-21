@@ -5,7 +5,7 @@ def candidate(cve, *, match_type="cpe_product_only", confidence=0.6, cvss=5.0, e
     return {"cve_id": cve, "match_type": match_type, "match_confidence": confidence, "cvss_score": cvss, "epss": epss, "kev": kev}
 
 
-def test_mandatory_candidates_are_never_removed_by_display_budget():
+def test_display_budget_is_strict_even_for_mandatory_candidates():
     rows = [
         candidate("CVE-KEV", kev=True),
         candidate("CVE-EXACT", match_type="exact_cpe_version", confidence=1.0),
@@ -16,9 +16,9 @@ def test_mandatory_candidates_are_never_removed_by_display_budget():
 
     selected, summary = prioritize_cve_candidates(rows, display_budget=1)
 
-    assert {row["cve_id"] for row in selected} == {"CVE-KEV", "CVE-EXACT", "CVE-CRITICAL", "CVE-EPSS"}
+    assert len(selected) == 1
     assert summary["mandatory_candidates"] == 4
-    assert summary["summarized_candidates"] == 1
+    assert summary["summarized_candidates"] == 4
 
 
 def test_product_only_candidates_are_ranked_not_arbitrarily_truncated():

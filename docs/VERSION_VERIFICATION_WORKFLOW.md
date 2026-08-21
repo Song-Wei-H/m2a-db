@@ -2,10 +2,12 @@
 
 ## Purpose
 
-M2A treats a `cpe_product_only` CVE association as **Version Unverified**.  It
-is external intelligence, not target applicability.  The analysis pipeline
-therefore emits `VERSION_VERIFICATION_REQUIRED`, creates no CVE validation
-ToolTask, and suppresses automatic HTTP depth scans.
+M2A treats a `cpe_product_only` CVE association as **Version Unverified**. It
+is external intelligence, not target applicability. The analysis pipeline now
+applies the deterministic confidence-driven policy, selects at most the governed
+Top-N candidates, and may create an approved safe-validation task when the
+confidence and priority gates pass. It no longer stops solely because the version
+is unknown. Product-only correlation still never confirms a vulnerability.
 
 ## Evidence contract
 

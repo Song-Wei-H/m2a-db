@@ -153,6 +153,14 @@ async def generate_tool_task(
     registry_row = await _get_tool_registry(recommended_tool)
 
     if registry_row is None:
+        if decision_result.get("cve_validation"):
+            return {
+                "action": "no_action",
+                "tool_task_id": None,
+                "tool_request_id": None,
+                "status": "deferred_no_compatible_tool",
+                "decision": "DEFER",
+            }
         reasoning = [
             f"Recommended tool {recommended_tool!r} is not enabled in ToolRegistry"
         ]

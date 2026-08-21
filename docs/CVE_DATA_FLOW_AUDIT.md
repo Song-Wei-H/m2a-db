@@ -23,11 +23,11 @@ HTTPx normalized product/CPE evidence reaches `worker.cve_matcher.match_cves_for
 9. Match method: CPE/product/version hybrid. Exact CPE+version = `exact_cpe_version` confidence 1.0; CPE product-only = `cpe_product_only` confidence 0.6; technology-only confidence 0.3 is discarded.
 10. Port-only inflation: prevented because open port number alone never queries CVEs. A match requires CPE product evidence and a product lookup.
 11. Vendor backport/distro patching: not resolved. Exact upstream version matching cannot prove distro backport status; this remains a documented applicability limitation requiring target/vendor validation.
-12. System semantics: all matches are candidates. Product-only candidates invoke a non-executable version-verification gate. Even exact-version candidates are not confirmed exploitability findings.
-13. Confidence field: `match_confidence`, interpreted together with `match_type` and observed version.
+12. System semantics: all matches are candidates. Product-only candidates with supported product identity enter governed Top-N validation even when the version is unresolved. Even exact-version candidates are not confirmed exploitability findings.
+13. Confidence fields: `match_confidence` is correlation strength; `product_identity_confidence` is independent from version; neither is vulnerability confidence.
 14. Risk consumption: all candidate scores are confidence-weighted, but only `exact_cpe_version` with confidence at least 0.85 and a non-empty observed version may populate max CVSS, max EPSS and KEV Risk Engine inputs.
 15. LLM/Decision context: best CVE, CVSS, EPSS, KEV, match type/confidence and candidate count are stored in the decision snapshot and bounded LLM payload.
-16. False authority escalation: current report metadata remains `HIGH_PRIORITY_CANDIDATE`; product-only is `NOT_TESTED`, and exact version still states that authorized target validation is required. No candidate becomes confirmed merely through matching.
+16. False authority escalation: report metadata uses `HIGH_VALIDATION_PRIORITY` for selected candidates and `CVE_CANDIDATE` otherwise. No candidate becomes confirmed merely through matching.
 17. Staleness: possible. `last_synced_at` is recorded but there is no automatic freshness gate. The local check on 2026-08-20 found 72 rows last synced on 2026-08-13.
 18. Reproducibility: sample-file dry runs and PostgreSQL-to-SQLite rebuild are reproducible; live NVD/EPSS/KEV values are time-varying and must be frozen/exported for a thesis run.
 19. Provenance timestamps: `source`, `published_at`, `updated_at` and `last_synced_at` are stored in `cve_enrichment`; match rows preserve source and creation time.
@@ -37,9 +37,9 @@ HTTPx normalized product/CPE evidence reaches `worker.cve_matcher.match_cves_for
 
 `Service Evidence → CVE Candidate → Risk Context → Validation → Confirmed/Not Confirmed`
 
-- `cpe_product_only` never supplies authoritative CVSS/EPSS/KEV maxima and creates no executable version-verification task.
+- `cpe_product_only` never supplies authoritative CVSS/EPSS/KEV Risk maxima; it may create a governed Top-N validation task when product identity and tool routing gates pass.
 - `exact_cpe_version` improves applicability and Risk context but still does not prove exploitability or patch state.
-- Reports use `HIGH_PRIORITY_CANDIDATE`, not confirmed-vulnerable language.
+- Reports use validation-priority language, not confirmed-vulnerable language.
 - `SOURCE_CLAIM`, `TECHNICAL_ANALYSIS`, `LAB_VERIFIED` and `TARGET_VERIFIED` remain distinct.
 
 ## Remaining Limitations

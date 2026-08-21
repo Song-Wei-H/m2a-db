@@ -449,7 +449,7 @@ async def _generate_tasks_from_nmap_open_ports(
                 mitre_technique=score["mitre_technique"],
 
                 reason=(
-                    "Version verification required before CVE validation"
+                    "Confidence-driven CVE validation policy applied"
                     if nmap_decision_result.get("verification_state")
                     else "Risk Engine v3 generated learning-adjusted base risk"
                 ),
@@ -1097,7 +1097,7 @@ async def analyze_tool_result_and_generate_task(
                 mitre_technique=mitre_mapping.get("technique_id"),
 
                 reason=(
-                    "Version verification required before CVE validation"
+                    "Confidence-driven CVE validation policy applied"
                     if decision_result.get("verification_state")
                     else "Risk Engine v3 generated learning-adjusted risk"
                 ),

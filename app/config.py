@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     cve_local_index_enabled: bool = False
     cve_query_safety_limit: int = 5000
     cve_report_candidate_budget: int = 50
+    max_cve_validations_per_round: int = 3
 
     @property
     def allowed_scopes_list(self) -> list[str]:

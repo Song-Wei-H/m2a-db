@@ -224,7 +224,10 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
     assert report["open_ports"][0]["matched_cves"][0]["cvss_score"] == 8.8
     assert report["open_ports"][0]["matched_cves"][0]["match_reason"].startswith("Exact product")
     assert report["open_ports"][0]["matched_cves"][0]["evidence_level"] == "TECHNICAL_ANALYSIS"
-    assert report["open_ports"][0]["matched_cves"][0]["finding_status"] == "HIGH_PRIORITY_CANDIDATE"
+    assert report["open_ports"][0]["matched_cves"][0]["finding_status"] == "HIGH_VALIDATION_PRIORITY"
+    assert report["open_ports"][0]["matched_cves"][0]["product_identity_confidence"] == 0.98
+    assert report["open_ports"][0]["matched_cves"][0]["version_status"] == "KNOWN"
+    assert report["open_ports"][0]["matched_cves"][0]["selected_for_validation"] is True
     assert [ref["authority"] for ref in report["open_ports"][0]["matched_cves"][0]["evidence_references"]] == ["NIST NVD", "CVE Program", "FIRST EPSS"]
     assert report["open_ports"][0]["matched_cves"][0]["evidence_references"][0]["url"].endswith("CVE-2024-NGINX-0001")
     assert report["tool_results"][0]["tool_name"] == "httpx"

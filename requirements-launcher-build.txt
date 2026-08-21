@@ -1,0 +1,2 @@
+# Release-only dependency; not required by the M2A runtime.
+PyInstaller==6.22.2

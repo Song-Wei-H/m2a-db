@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import PortCveMatch
+from worker.cve_validation_policy import evaluate_candidate
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,7 @@ class CveRiskSummary:
     cve_count: int
     best_match_confidence: float | None
     best_match_type: str | None
+    candidates: tuple[dict, ...] = ()
 
 
 def clamp_score(value: float, *, minimum: float = 0.0, maximum: float = 10.0) -> float:
@@ -141,6 +143,7 @@ async def summarize_cve_risk(
             cve_count=0,
             best_match_confidence=None,
             best_match_type=None,
+            candidates=(),
         )
 
     best_score = 0.0
@@ -152,8 +155,24 @@ async def summarize_cve_risk(
     max_cvss: float | None = None
     max_epss: float | None = None
     has_kev = False
+    candidates: list[dict] = []
 
     for row in rows:
+        candidate = evaluate_candidate(
+            {
+                "cve_id": row.cve_id,
+                "product": getattr(row, "product", None),
+                "detected_version": getattr(row, "version", None),
+                "affected_version": getattr(row, "affected_version", None),
+                "match_type": row.match_type,
+                "match_confidence": row.match_confidence,
+                "cvss": row_cvss(row),
+                "epss": row.epss,
+                "kev": bool(row.kev),
+                "source": getattr(row, "source", None),
+            }
+        )
+        candidates.append(candidate)
         item_score = score_single_cve(
             cvss=row_cvss(row),
             epss=row.epss,
@@ -188,4 +207,5 @@ async def summarize_cve_risk(
         cve_count=len(rows),
         best_match_confidence=best_match_confidence,
         best_match_type=best_match_type,
+        candidates=tuple(candidates),
     )

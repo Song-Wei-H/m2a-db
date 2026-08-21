@@ -16,3 +16,9 @@ app.include_router(llm_tools_router)
 app.include_router(approval_router)
 app.include_router(worker_preflight_router)
 app.include_router(automation_router)
+
+
+@app.get("/health", tags=["health"])
+def health() -> dict[str, str]:
+    """Launcher 使用的無副作用存活檢查。"""
+    return {"status": "ok", "service": "M2A Backend", "version": app.version}

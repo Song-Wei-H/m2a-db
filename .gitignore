@@ -48,3 +48,4 @@ docker-compose.override.yml
 test_results.txt
 reports/
 mlruns/
+.m2a-launcher.lock

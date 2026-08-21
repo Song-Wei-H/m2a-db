@@ -45,7 +45,7 @@ class TaskSnapshot:
     action_id: str | None = None
 
 
-async def fetch_pending_tasks(db: AsyncSession, limit: int = 10) -> list[ToolTask]:
+def _pending_tasks_statement(*, limit: int = 10, target_id: int | None = None):
     stmt = (
         select(ToolTask)
         .outerjoin(ExecutionAuthorization, ToolTask.execution_authorization_id == ExecutionAuthorization.id)
@@ -63,10 +63,22 @@ async def fetch_pending_tasks(db: AsyncSession, limit: int = 10) -> list[ToolTas
                 ),
             ),
         )
-        .order_by(ToolTask.priority.desc(), ToolTask.id)
-        .limit(limit)
-        .with_for_update(skip_locked=True)
     )
+    if target_id is not None:
+        stmt = stmt.where(ToolTask.target_id == target_id)
+    return (
+        stmt.order_by(ToolTask.priority.desc(), ToolTask.id)
+        .limit(limit)
+        # PostgreSQL rejects an unqualified FOR UPDATE when the statement has
+        # a LEFT OUTER JOIN because the nullable authorization side cannot be
+        # locked. Only ToolTask rows are claimed here; authorization is locked
+        # separately in _claim_task before its single-use counter is consumed.
+        .with_for_update(of=ToolTask, skip_locked=True)
+    )
+
+
+async def fetch_pending_tasks(db: AsyncSession, limit: int = 10) -> list[ToolTask]:
+    stmt = _pending_tasks_statement(limit=limit)
     result = await db.execute(stmt)
     return list(result.scalars().all())
 
@@ -497,23 +509,7 @@ async def poll_once() -> int:
 async def poll_target_once(target_id: int) -> int:
     """Process executable pending tasks for exactly one governed target."""
     async with async_session() as db, db.begin():
-        stmt = (
-            select(ToolTask)
-            .outerjoin(ExecutionAuthorization, ToolTask.execution_authorization_id == ExecutionAuthorization.id)
-            .where(
-                ToolTask.target_id == target_id,
-                ToolTask.status == PENDING,
-                ToolTask.approval_status.in_(EXECUTABLE_APPROVAL_STATUSES),
-                or_(
-                    and_(ToolTask.execution_authorization_id.is_(None), ToolTask.tool_name.notin_(PROTECTED_VALIDATION_TOOLS)),
-                    and_(ExecutionAuthorization.expires_at > utcnow_naive(),
-                         ExecutionAuthorization.consumed_count < ExecutionAuthorization.execution_limit),
-                ),
-            )
-            .order_by(ToolTask.priority.desc(), ToolTask.id)
-            .limit(10)
-            .with_for_update(skip_locked=True)
-        )
+        stmt = _pending_tasks_statement(limit=10, target_id=target_id)
         tasks = list((await db.execute(stmt)).scalars().all())
     for task in tasks:
         await execute_task(task.id)

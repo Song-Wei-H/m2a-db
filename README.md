@@ -110,15 +110,15 @@ ALLOWED_LLM_PROFILES=internal
 
 ### 4.3 API Key 要加在哪裡
 
-目前 M2A **沒有直接呼叫 NVIDIA、OpenAI 或 Anthropic API**。程式也沒有讀取 `LLM_API_KEY`；不要把供應商 Key 放進 `.env`。
+M2A 的選用 advisory LLM runner 使用 OpenAI-compatible Chat Completions，讀取 `LLM_BASE_URL`、`LLM_MODEL`、`LLM_SEND_AUTH` 與選用的 `LLM_API_KEY`。可由 Launcher 的「API / LLM 設定」安全更新既有 `.env`；API Key 不得 commit、貼入 Issue、Notion 或聊天。
 
-目前正確整合方式是由外部 LLM／決策服務產生受 schema 約束的提案，再呼叫：
+M2A 保留兩條受治理路徑：選用的內建 advisory runner 只接收最小 decision context；外部 LLM／決策服務則產生受 schema 約束的提案，再呼叫：
 
 ```text
 POST http://<M2A_API>/tools/llm-propose
 ```
 
-供應商 API Key 應只存在外部決策服務的 secret store，而不是瀏覽器、Notion、Git 或 M2A 前端。未來若加入 M2A 內建 provider client，必須先加入明確設定欄位、secret handling、egress policy、測試與人工審查。
+外部服務的供應商 API Key 應只存在該服務的 secret store；Launcher 設定的 `LLM_API_KEY` 只供現有內建 advisory runner 使用。兩者都不得放在瀏覽器、Notion、Git 或 M2A 前端。
 
 ### 4.4 啟動 PostgreSQL
 
@@ -175,6 +175,12 @@ historical approvals into authorizations. `nuclei_safe` without a valid,
 unexpired, unconsumed authorization is not executable.
 
 ## 5. 每次啟動 SOP
+
+Windows Launcher 可將本節的手動啟動流程整合為單一入口；設定、WSL／Remote Worker、Build、Log 與疑難排解請見 [`docs/M2A-Launcher.md`](docs/M2A-Launcher.md)。開發環境可執行：
+
+```powershell
+.\.venv\Scripts\python.exe -m m2a_launcher.main
+```
 
 請開四個終端，順序如下。
 
@@ -390,7 +396,7 @@ Use `scripts/start-api.ps1` as the normal API entry point. It enforces one compa
 
 ## CVE evidence citations
 
-CVE matches are reported as governed candidates with official claim-level references. M2A links the NVD and CVE Program record for identity/CVSS context, FIRST EPSS when an EPSS value is present, and CISA KEV when KEV membership is asserted. Product-only matching remains `SOURCE_CLAIM / HIGH_PRIORITY_CANDIDATE / NOT_TESTED`; it is not a confirmed target vulnerability.
+CVE matches are reported as governed candidates with official claim-level references. M2A links the NVD and CVE Program record for identity/CVSS context, FIRST EPSS when an EPSS value is present, and CISA KEV when KEV membership is asserted. Product-only matching remains `SOURCE_CLAIM / HIGH_VALIDATION_PRIORITY / VERSION_UNRESOLVED`; version is filtering evidence rather than a validation prerequisite, and a candidate is not a confirmed target vulnerability.
 
 In Report Center, `下載 HTML`, `下載 PDF`, `下載 JSON`, and `全部下載` first generate verified server artifacts and then immediately hand the resulting files to the browser download manager. Server copies remain under `reports/` for lifecycle and integrity tracking.
 

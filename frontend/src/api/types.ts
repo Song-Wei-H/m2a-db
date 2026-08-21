@@ -72,6 +72,9 @@ export type ToolResult = {
 };
 
 export type Decision = {
+  id?: number | null;
+  decision_score_id?: number | null;
+  open_port_id?: number | null;
   risk_score?: number | null;
   severity?: Severity | null;
   next_action?: string | null;
@@ -80,6 +83,15 @@ export type Decision = {
   reason?: string | null;
   mitre_phase?: string | null;
   mitre_technique?: string | null;
+};
+
+export type ToolTask = {
+  id?: number | null;
+  tool_task_id?: number | null;
+  tool_name?: string | null;
+  status?: string | null;
+  decision_score_id?: number | null;
+  reject_reason?: string | null;
 };
 
 export type LearningFeedback = {
@@ -107,7 +119,7 @@ export type TargetReport = {
   remediation: Array<Record<string, unknown>>;
   matched_cves: Array<Record<string, unknown>>;
   cve_candidate_summary?: Record<string, unknown>;
-  tool_tasks: Array<Record<string, unknown>>;
+  tool_tasks: ToolTask[];
   normalized_results: Array<Record<string, unknown>>;
   remediation_guidance: string[];
   evidence_confidence: Array<Record<string, unknown>>;

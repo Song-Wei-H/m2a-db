@@ -224,7 +224,7 @@ async def match_cves_for_target(
             match_reason = (
                 f"Exact product and version match from {lookup_source}."
                 if match_type == "exact_cpe_version"
-                else f"Product-only candidate from {lookup_source}; version unknown, confidence capped."
+                else f"Product-only candidate from {lookup_source}; version unresolved; match_confidence is correlation strength, not vulnerability confidence."
             )
             row_data = {
                 "target_id": target_id,

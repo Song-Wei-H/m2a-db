@@ -131,7 +131,7 @@ export function TargetDetail() {
           <Card>
             <CardHeader><CardTitle>決策歷史</CardTitle></CardHeader>
             <CardContent className="space-y-3">
-              {(decisions.data ?? report.data.decision_scores).map((decision, index) => <DecisionCard key={index} decision={decision} index={index} />)}
+              {(decisions.data ?? report.data.decision_scores).map((decision, index) => <DecisionCard key={index} decision={decision} index={index} toolTasks={report.data.tool_tasks} />)}
             </CardContent>
           </Card>
         </div>

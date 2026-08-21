@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Iterable
 
+from worker.cve_validation_policy import select_validation_candidates
+
 
 def _number(value: Any) -> float:
     try:
@@ -13,7 +15,7 @@ def _number(value: Any) -> float:
         return 0.0
 
 
-def _rank(item: dict[str, Any]) -> tuple[float, float, float, str]:
+def _rank(item: dict[str, Any]) -> tuple[float, float, float, float, str]:
     confidence = _number(item.get("match_confidence"))
     cvss = _number(item.get("cvss_score") if item.get("cvss_score") is not None else item.get("cvss"))
     epss = _number(item.get("epss"))
@@ -24,7 +26,13 @@ def _rank(item: dict[str, Any]) -> tuple[float, float, float, str]:
         + cvss * 10
         + epss * 100
     )
-    return score, cvss, epss, str(item.get("cve_id") or item.get("cve") or "")
+    return (
+        _number(item.get("validation_priority_score")),
+        score,
+        cvss,
+        epss,
+        str(item.get("cve_id") or item.get("cve") or ""),
+    )
 
 
 def _mandatory(item: dict[str, Any]) -> bool:
@@ -50,11 +58,13 @@ def prioritize_cve_candidates(candidates: Iterable[dict[str, Any]], display_budg
         if current is None or _rank(item) > _rank(current):
             deduped[cve_id] = item
 
-    ordered = sorted(deduped.values(), key=_rank, reverse=True)
+    _, evaluated = select_validation_candidates(deduped.values())
+    ordered = sorted(evaluated, key=_rank, reverse=True)
     mandatory = [item for item in ordered if _mandatory(item)]
     optional = [item for item in ordered if not _mandatory(item)]
-    remaining = max(display_budget - len(mandatory), 0)
-    selected = mandatory + optional[:remaining]
+    # Report rendering is a strict presentation budget. Mandatory status still
+    # affects ranking/summary, but cannot expand an unbounded product list.
+    selected = ordered[: max(display_budget, 0)]
     selected_ids = {str(item.get("cve_id") or item.get("cve")) for item in selected}
     match_types = Counter(str(item.get("match_type") or "unknown") for item in ordered)
     summary = {
@@ -67,6 +77,7 @@ def prioritize_cve_candidates(candidates: Iterable[dict[str, Any]], display_budg
         "exact_version_candidates": match_types.get("exact_cpe_version", 0),
         "product_only_candidates": match_types.get("cpe_product_only", 0),
         "selected_cve_ids": sorted(selected_ids),
-        "selection_policy": "all KEV + all exact-version + confidence>=0.7 critical/high-EPSS + risk-ranked remainder",
+        "validation_selected_candidates": sum(bool(item.get("selected_for_validation")) for item in ordered),
+        "selection_policy": "strict Top-N by validation priority; mandatory attributes influence rank but never bypass the display budget",
     }
     return selected, summary

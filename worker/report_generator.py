@@ -1,5 +1,6 @@
 """Report Generator for creating comprehensive target reports."""
 from datetime import datetime
+from collections import Counter
 from typing import Any, Dict, Iterable
 
 from sqlalchemy import or_, select
@@ -22,6 +23,8 @@ from app.models import (
 )
 from app.config import settings
 from worker.cve_prioritizer import prioritize_cve_candidates
+from worker.cve_validation_policy import evaluate_candidate, select_validation_candidates
+from worker.cve_trace import build_cve_validation_trace
 
 __all__ = ["generate_target_report"]
 
@@ -66,14 +69,32 @@ def _cve_evidence_metadata(match: Any, cve_id: str, affected_version: str | None
             }
         )
     created_at = getattr(match, "created_at", None)
+    observed_version = getattr(match, "version", None)
+    policy = evaluate_candidate(
+        {
+            "cve_id": cve_id,
+            "match_type": getattr(match, "match_type", None),
+            "match_confidence": getattr(match, "match_confidence", None),
+            "cvss": getattr(match, "cvss_score", None) or getattr(match, "cvss", None),
+            "epss": getattr(match, "epss", None),
+            "kev": bool(getattr(match, "kev", False)),
+            "detected_version": observed_version,
+        }
+    )
     return {
-        "evidence_level": "TECHNICAL_ANALYSIS" if affected_version else "SOURCE_CLAIM",
-        "finding_status": "HIGH_PRIORITY_CANDIDATE",
-        "validation_status": "OBSERVED" if affected_version else "NOT_TESTED",
+        "evidence_level": "TECHNICAL_ANALYSIS" if observed_version else "SOURCE_CLAIM",
+        "finding_status": "HIGH_VALIDATION_PRIORITY",
+        "validation_status": policy["validation_state"],
+        "product_identity_confidence": policy["product_identity_confidence"],
+        "version_status": policy["version_status"],
+        "applicability_state": policy["applicability_state"],
+        "applicability_confidence": policy["applicability_confidence"],
+        "validation_priority_score": policy["validation_priority_score"],
+        "validation_decision": policy["decision"],
         "target_evidence": {
             "open_port_id": getattr(match, "open_port_id", None),
             "observed_product": getattr(match, "product", None),
-            "observed_version": getattr(match, "version", None),
+            "observed_version": observed_version,
             "match_type": getattr(match, "match_type", None),
             "match_reason": getattr(match, "match_reason", None),
             "matched_at": created_at.isoformat() if hasattr(created_at, "isoformat") else created_at,
@@ -81,7 +102,7 @@ def _cve_evidence_metadata(match: Any, cve_id: str, affected_version: str | None
         "evidence_references": references,
         "evidence_notice": (
             "已觀察到產品與版本證據；仍需授權的目標驗證才能確認漏洞可利用性。"
-            if affected_version
+            if observed_version
             else "僅為產品層級候選；版本未知，不代表目標已確認存在漏洞。"
         ),
     }
@@ -197,13 +218,24 @@ def _remediation_for_decision(decision: DecisionScore, port: OpenPort | None) ->
     protocol = port.protocol if port else None
     severity = (decision.severity or "").lower()
     next_action = (decision.next_action or "").lower()
+    snapshot = decision.input_snapshot or {}
+    cve_gate = snapshot.get("cve_gate") or {}
+    candidate_states = {
+        row.get("validation_state") for row in cve_gate.get("candidate_decisions", []) if isinstance(row, dict)
+    }
+    applicability_confirmed = bool(candidate_states & {"VERSION_APPLICABLE", "VALIDATED"})
     guidance = (
         f"Prioritize remediation for {service or 'affected service'} based on "
         f"{decision.severity or 'unknown'} risk decision."
     )
     if service:
         guidance = _remediation_for_port(port)["guidance"]
-    if severity in {"critical", "high"}:
+    if cve_gate and not applicability_confirmed:
+        guidance = (
+            "Prioritize the candidate for validation. The version could not be reliably identified. "
+            "Validate candidate vulnerability applicability through a registered validation capability."
+        )
+    elif severity in {"critical", "high"}:
         guidance = (
             f"{guidance} Prioritize patching, restrict exposure, and confirm whether KEV/CVE matches apply."
         )
@@ -550,11 +582,47 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             )
         prioritized_cves, cve_candidate_summary = prioritize_cve_candidates(
             matched_cves,
-            display_budget=settings.cve_report_candidate_budget,
+            display_budget=min(settings.cve_report_candidate_budget, 5),
+        )
+        for item in prioritized_cves:
+            item["finding_status"] = (
+                "HIGH_VALIDATION_PRIORITY" if item.get("selected_for_validation") else "CVE_CANDIDATE"
+            )
+        cve_candidate_summary.update(
+            {
+                "detected_products": sorted({str(item.get("product")) for item in matched_cves if item.get("product")}),
+                "detected_versions": sorted({str(item.get("version")) for item in matched_cves if item.get("version")}),
+                "max_product_identity_confidence": max(
+                    (float(item.get("product_identity_confidence") or 0) for item in prioritized_cves),
+                    default=0.0,
+                ),
+                "version_status_counts": dict(Counter(str(item.get("version_status") or "UNKNOWN") for item in prioritized_cves)),
+                "product_level_candidates": sum(
+                    item.get("match_type") in {"product_only", "cpe_product_only"} for item in matched_cves
+                ),
+                "version_applicable_cves": sum(
+                    item.get("applicability_state") == "VERSION_APPLICABLE" for item in prioritized_cves
+                ),
+                "validated_vulnerabilities": sum(
+                    item.get("validation_status") == "VALIDATED" for item in matched_cves
+                ),
+                "selected_for_validation": sum(
+                    bool(item.get("selected_for_validation")) for item in prioritized_cves
+                ),
+                "additional_candidates": max(len(matched_cves) - len(prioritized_cves), 0),
+                "applicability_notice": "Product-level correlation does not confirm vulnerability applicability.",
+            }
         )
         selected_cve_ids = {str(item.get("cve_id") or item.get("cve")) for item in prioritized_cves}
+        prioritized_by_id = {
+            str(item.get("cve_id") or item.get("cve")): item for item in prioritized_cves
+        }
         cves_by_port = {
-            port_id: [item for item in items if str(item.get("cve_id") or item.get("cve")) in selected_cve_ids]
+            port_id: [
+                prioritized_by_id[str(item.get("cve_id") or item.get("cve"))]
+                for item in items
+                if str(item.get("cve_id") or item.get("cve")) in selected_cve_ids
+            ]
             for port_id, items in cves_by_port.items()
         }
         decisions_by_risk = sorted(
@@ -858,6 +926,18 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             tool_results,
             llm_advisory_recommendations,
         )
+        _, trace_candidates = select_validation_candidates(
+            matched_cves,
+            limit=settings.max_cve_validations_per_round,
+        )
+        cve_validation_trace = build_cve_validation_trace(
+            trace_candidates,
+            target_id=target_id,
+            decisions=decision_scores_data,
+            tool_tasks=tool_tasks_data,
+            tool_results=tool_results_data,
+            evidence_rows=evidence_confidence_data,
+        )
 
         return {
             "target_summary": target_summary,
@@ -882,5 +962,6 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             "learning_tool_score": learning_tool_score,
             "matched_cves": prioritized_cves,
             "cve_candidate_summary": cve_candidate_summary,
+            "cve_validation_trace": cve_validation_trace,
             "quantitative_metrics": quantitative_metrics,
         }
