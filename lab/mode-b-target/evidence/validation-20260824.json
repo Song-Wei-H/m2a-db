@@ -1,0 +1,16 @@
+{
+  "evidence_level": "LAB_VERIFIED",
+  "target": "m2a-mode-b-target:8080",
+  "validation_scope": "deterministic fixture only; not M2A ToolTask E2E",
+  "image": "docker/welcome-to-docker@sha256:c4d56c24da4f009ecf8352146b43497fe78953edb4c679b841732beb97e588b0",
+  "runtime": {"user":"101:101","read_only":true,"cap_drop":["ALL"],"no_new_privileges":true,"memory_limit_bytes":134217728,"cpu_limit":0.25,"pids_limit":64,"observed_memory":"2.871MiB","health":"healthy"},
+  "observations": {"healthz":"mode-b-target-ready","index_title":"M2A Mode B Lab Target","git_config_signature":"repositoryformatversion = 0","directory_listing":"README.txt","http_status":200,"server":"nginx/1.29.0","missing_headers":["Content-Security-Policy","Strict-Transport-Security","X-Frame-Options"]},
+  "probe": {"ephemeral":true,"non_root":true,"read_only":true,"cap_drop":["ALL"],"network":"m2a-mode-b-lab","result":"PROBE_PASS"},
+  "file_sha256": {
+    "compose.mode-b-target.yml":"47D5156547A80EEDFBC7E96277FD185970AC0A263D0D5616FC185571184D4E85",
+    "nginx.conf":"A06D8B9923E3C9763CA8FF1B1838FF03B0F457801D9D367951527E090A63B80B",
+    "index.html":"358830B45938644B72D0ED1A9543F7FA311544B070B3995BF08FFAEAFC062143",
+    ".git/config":"9D172385D0182B3E7B7FB91D8C8C3394A825D09FFF4DD37472288874BF9C17D5",
+    "backup/README.txt":"1771F0D32DE85B73E5C01BC825F35EF625B74DD07E61CE5CC4DB59F12F63A0AE"
+  }
+}

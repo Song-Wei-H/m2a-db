@@ -126,7 +126,8 @@ def call_litellm(payload: dict[str, Any]) -> dict[str, Any]:
     if settings.llm_send_auth and settings.llm_api_key:
         headers["Authorization"] = f"Bearer {settings.llm_api_key}"
 
-    response = httpx.post(
+    response = httpx.request(
+        "POST",
         f"{settings.llm_base_url.rstrip('/')}/chat/completions",
         headers=headers,
         json={
@@ -145,6 +146,7 @@ def call_litellm(payload: dict[str, Any]) -> dict[str, Any]:
             "temperature": 0,
         },
         timeout=settings.llm_timeout_seconds,
+        trust_env=False,
     )
     response.raise_for_status()
     body = response.json()

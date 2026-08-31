@@ -1,0 +1,33 @@
+services:
+  mode-b-target:
+    image: docker/welcome-to-docker:latest
+    container_name: m2a-mode-b-target
+    restart: unless-stopped
+    user: "101:101"
+    command: ["nginx", "-c", "/etc/nginx/mode-b-target.conf", "-g", "daemon off;"]
+    ports:
+      - "10.56.66.119:18080:8080"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+    volumes:
+      - ./lab/mode-b-target/nginx.conf:/etc/nginx/mode-b-target.conf:ro
+      - ./lab/mode-b-target/www:/usr/share/nginx/mode-b-target:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - mode-b-lab
+
+networks:
+  mode-b-lab:
+    name: m2a-mode-b-lab

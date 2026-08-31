@@ -24,17 +24,19 @@ def test_litellm_decision_uses_controlled_context_and_configured_model(monkeypat
             }
         ]
     }
-    monkeypatch.setattr(llm_decision.httpx, "post", MagicMock(return_value=response))
+    monkeypatch.setattr(llm_decision.httpx, "request", MagicMock(return_value=response))
 
     result = llm_decision.call_litellm({"context_contract": "minimal-decision-context-v1", "match_confidence": 0.9})
 
     assert result["validated"]["recommended_tool"] == "nmap_service"
-    url = llm_decision.httpx.post.call_args.args[0]
-    request = llm_decision.httpx.post.call_args.kwargs
+    method, url = llm_decision.httpx.request.call_args.args
+    request = llm_decision.httpx.request.call_args.kwargs
+    assert method == "POST"
     assert url == "http://llm.test/v1/chat/completions"
     assert request["json"]["model"] == "openai/qwen3-4b-thinking-2507-heretic"
     assert request["json"]["temperature"] == 0
     assert request["timeout"] == 12.0
+    assert request["trust_env"] is False
     assert "Authorization" not in request["headers"]
 
 
@@ -52,7 +54,7 @@ def test_litellm_decision_normalizes_string_null_tool(monkeypatch):
             }
         ]
     }
-    monkeypatch.setattr(llm_decision.httpx, "post", MagicMock(return_value=response))
+    monkeypatch.setattr(llm_decision.httpx, "request", MagicMock(return_value=response))
 
     result = llm_decision.call_litellm({"match_confidence": 0.9})
 
