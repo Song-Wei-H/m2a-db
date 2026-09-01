@@ -81,23 +81,29 @@ def normalize_action_intent(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def materialize_authoritative_parameters(
+    scenario: dict[str, Any], action_id: str | None,
+) -> dict[str, Any]:
+    """Build execution parameters only from frozen Evidence and Registry identity."""
+    evidence = scenario.get("evidence") or {}
+    if action_id not in TOOL_BY_ACTION:
+        return {}
+    port = evidence.get("port")
+    protocol = evidence.get("protocol")
+    if protocol is None and port is not None:
+        protocol = "tcp"
+    return canonical_parameters(
+        target=str(evidence["target"]), port=port, protocol=protocol,
+        service=scenario.get("service"), action_id=action_id,
+    )
+
+
 def materialize_action_intent(
     scenario: dict[str, Any], action_intent: dict[str, Any], *, raw_response: dict[str, Any],
 ) -> dict[str, Any]:
     """Build authoritative parameters only from frozen evidence and Registry identity."""
-    evidence = scenario.get("evidence") or {}
     action_id = action_intent.get("selected_action")
-    proposed_parameters: dict[str, Any] = {}
-    if action_id in TOOL_BY_ACTION:
-        port = evidence.get("port")
-        service = scenario.get("service")
-        protocol = evidence.get("protocol")
-        if protocol is None and port is not None:
-            protocol = "tcp"
-        proposed_parameters = canonical_parameters(
-            target=str(evidence["target"]), port=port, protocol=protocol,
-            service=service, action_id=action_id,
-        )
+    proposed_parameters = materialize_authoritative_parameters(scenario, action_id)
     return {
         "selected_action": action_id,
         "proposed_parameters": proposed_parameters,

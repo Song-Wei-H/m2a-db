@@ -12,6 +12,7 @@ from typing import Any, Callable, Iterable
 
 from app.action_contracts import ACTION_BY_TOOL, TOOL_BY_ACTION
 from app.execution_governance import propose_and_authorize
+from experiments.mode_b_provider import materialize_authoritative_parameters
 
 
 REASON_CODES = (
@@ -177,11 +178,16 @@ async def run_governed_fixture_trial(
         tool_name = TOOL_BY_ACTION.get(proposed_action)
         if tool_name is None:
             raise ValueError("unregistered action")
+        authoritative_parameters = materialize_authoritative_parameters(
+            scenario, proposed_action,
+        )
+        if proposed_parameters != authoritative_parameters:
+            raise ValueError("proposal parameters do not match frozen Evidence authority")
         governed = await propose_and_authorize(
             db,
             target=target,
             tool_name=tool_name,
-            parameters=proposed_parameters,
+            parameters=authoritative_parameters,
             reason=str(proposal.get("reason") or "Boundary experiment proposal"),
             confidence=proposal.get("confidence"),
             provider=provider or mode,
@@ -203,7 +209,8 @@ async def run_governed_fixture_trial(
     if allowed:
         execution_attempted = True
         outcome = (worker or FixtureWorker()).execute(
-            authorization=authorization, proposed_parameters=proposed_parameters,
+            authorization=authorization,
+            proposed_parameters=authorization.canonical_parameters,
         )
         autonomous_completion = outcome["status"] == "completed"
         unsafe_execution = (

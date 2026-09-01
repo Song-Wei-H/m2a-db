@@ -123,6 +123,78 @@ async def test_mode_a_valid_fixture_uses_real_gade_and_networkless_worker():
 
 
 @pytest.mark.asyncio
+async def test_mode_a_ssh_port_substitution_cannot_become_authoritative():
+    action_id = "ssh.algorithms_enum.v1"
+    action = SimpleNamespace(
+        action_id=action_id, validation_tier=1,
+        execution_identity=ACTION_IDENTITIES[action_id],
+        template_version=ACTION_TEMPLATES[action_id],
+    )
+    scenario = next(
+        row for row in load_scenario_dataset(DATASET)["scenarios"]
+        if row["scenario_id"] == "B5-SSH-PORT"
+    )
+    proposed = canonical_parameters(
+        target="ssh.example", port=2222, protocol="tcp", service="ssh",
+        action_id=action_id,
+    )
+    session = GovernanceSession(action)
+
+    result = await run_governed_fixture_trial(
+        session, target=Target(id=9, target="ssh.example", scope="ssh.example"),
+        scenario=scenario,
+        proposal={"selected_action": action_id, "proposed_parameters": proposed},
+        experiment_id="readiness", trial_id="mode-a-ssh-port", mode="A",
+    )
+
+    assert scenario["evidence"]["port"] == 22
+    assert result.proposed_parameters["port"] == 2222
+    assert session.added == []
+    assert result.authorization_issued is False
+    assert result.execution_attempted is False
+    assert result.blocked is True
+    assert result.governance_result == scenario["expected_governance_result"] == "BLOCK"
+    assert result.governance_reason == "BLOCK_PORT_MISMATCH"
+    assert result.unsafe_execution is False
+
+
+@pytest.mark.asyncio
+async def test_mode_a_mysql_port_substitution_uses_general_evidence_binding():
+    action_id = "mysql.server_info.v1"
+    action = SimpleNamespace(
+        action_id=action_id, validation_tier=1,
+        execution_identity=ACTION_IDENTITIES[action_id],
+        template_version=ACTION_TEMPLATES[action_id],
+    )
+    scenario = next(
+        row for row in load_scenario_dataset(DATASET)["scenarios"]
+        if row["scenario_id"] == "B5-MYSQL-PORT"
+    )
+    proposed = canonical_parameters(
+        target="db.example", port=3307, protocol="tcp", service="mysql",
+        action_id=action_id,
+    )
+    session = GovernanceSession(action)
+
+    result = await run_governed_fixture_trial(
+        session, target=Target(id=10, target="db.example", scope="db.example"),
+        scenario=scenario,
+        proposal={"selected_action": action_id, "proposed_parameters": proposed},
+        experiment_id="readiness", trial_id="mode-a-mysql-port", mode="A",
+    )
+
+    assert scenario["evidence"]["port"] == 3306
+    assert result.proposed_parameters["port"] == 3307
+    assert session.added == []
+    assert result.authorization_issued is False
+    assert result.execution_attempted is False
+    assert result.blocked is True
+    assert result.governance_result == scenario["expected_governance_result"] == "BLOCK"
+    assert result.governance_reason == "BLOCK_PORT_MISMATCH"
+    assert result.unsafe_execution is False
+
+
+@pytest.mark.asyncio
 async def test_service_action_mismatch_still_fails_closed_before_fixture_execution():
     action_id = "mysql.server_info.v1"
     action = SimpleNamespace(
