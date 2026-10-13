@@ -19,13 +19,40 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from app.action_contracts import ACTION_IDENTITIES, ACTION_TEMPLATES
 from app.execution_governance import evaluate_and_authorize, canonical_parameters, parameter_hash
 from app.execution_trace import (context_evidence, execution_request, trace_tool_result,
-                                 proposal_input, result_output)
+                                 proposal_input, result_output, evaluation_matches_grant,
+                                 grant_contract)
 from app.models import (Base, Target, OpenPort, DecisionScore, DecisionProposal,
                         AuthorizationDecision, ExecutionAuthorization, ToolResult, ToolTask, ValidationAction)
 from app.tool_task_writer import create_tool_task_if_not_exists
 from kali_worker.app import ExecuteRequest, execute
 from worker.task_poller import _claim_task, _load_task_context, _persist_result
 from worker.tool_runner import ToolRunOutcome
+
+
+def test_evaluation_snapshot_allows_policy_metadata_but_matches_entire_grant_contract():
+    grant = SimpleNamespace(
+        id=7, proposal_id=8, target_id=9, investigation_id="inv-1", action_id="http.headers.v1",
+        canonical_parameters={"target": "trace.example", "port": 80}, parameters_hash="abc",
+        execution_identity={"binary": "safe"}, template_version="v1", validation_tier=1,
+        scope={"target": "trace.example"}, execution_limit=1,
+        expires_at=None, authorization_source="gade-tier-policy",
+    )
+    expected = grant_contract(grant)
+    evaluation = SimpleNamespace(contract_snapshot={
+        **expected, "policy_version": "m2a-attack-depth-v1", "depth_check": "PASS",
+        "evidence_check": "PASS", "approval_check": "PASS", "reason_code": None,
+    })
+    assert evaluation_matches_grant(evaluation, grant)
+
+    evaluation.contract_snapshot["action_id"] = "different.action"
+    assert not evaluation_matches_grant(evaluation, grant)
+
+    evaluation.contract_snapshot = dict(expected)
+    del evaluation.contract_snapshot["execution_identity"]
+    assert not evaluation_matches_grant(evaluation, grant)
+
+    evaluation.contract_snapshot = None
+    assert not evaluation_matches_grant(evaluation, grant)
 
 
 def test_actual_argv_drift_never_calls_subprocess():

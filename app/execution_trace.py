@@ -52,6 +52,20 @@ def grant_contract(row) -> dict:
             for value in [getattr(row, key, None)]}
 
 
+def evaluation_matches_grant(evaluation, grant) -> bool:
+    """Check the authorization snapshot's grant fields, allowing policy metadata.
+
+    AuthorizationDecision.contract_snapshot also stores policy checks and a reason
+    code. Comparing that entire object to the grant contract incorrectly marks every
+    otherwise valid evaluation as mismatched.
+    """
+    snapshot = evaluation.contract_snapshot
+    if not isinstance(snapshot, dict):
+        return False
+    expected = grant_contract(grant)
+    return all(key in snapshot and snapshot[key] == value for key, value in expected.items())
+
+
 def evaluation_input(row) -> dict:
     return {key: getattr(row, key, None) for key in
             ("proposal_id", "authorization_id", "outcome", "reason", "policy_source", "contract_snapshot")}
@@ -116,7 +130,7 @@ async def trace_tool_result(db, result_id: int) -> dict[str, Any]:
         issues.append("proposal_authorization_identity_mismatch")
     if evaluation:
         if (evaluation.outcome != "ALLOW" or evaluation.proposal_id != grant.proposal_id
-                or evaluation.contract_snapshot != grant_contract(grant)
+                or not evaluation_matches_grant(evaluation, grant)
                 or evaluation.record_hash != parameter_hash(evaluation_input(evaluation))):
             issues.append("authorization_evaluation_mismatch")
     if task:
