@@ -1,0 +1,30 @@
+{
+  "generated_at_utc": "2026-10-13T08:59:47.754565+00:00",
+  "baseline_tag": "gade-preexp-v1",
+  "baseline_commit_sha": "9eaea6a355a07687031e8c43465c17bc5fce1145",
+  "source_head_sha": "9eaea6a355a07687031e8c43465c17bc5fce1145",
+  "experiment_commit_sha": null,
+  "source_state": "uncommitted experiment runner; runner_sha256 is the exact code identity",
+  "policy_version": "m2a-attack-depth-v1",
+  "action_contract_sha256": "29848d4a8b4d91e294ecc7688044ba165257a69cd160454d3f9c0d8f647f6079",
+  "runner_sha256": "e711743536164c653a02ec427dcbb93fafa6f5da0e38e32e46006eb25677c371",
+  "dataset_sha256": "ba95a55b5c3f8836c71b0a0057adca8f2a4e23d9dc216438969782f9482b35f3",
+  "raw_result_sha256": {
+    "dataset.json": "ba95a55b5c3f8836c71b0a0057adca8f2a4e23d9dc216438969782f9482b35f3",
+    "matrix-49.json": "c8d7d2a27c133ae621c3a4243132024050fd87e2ea34825346810efdb230d7df",
+    "pilot-ab.json": "5900df981cd7b57e1cfb076421d4671bf315c0d04e0d5aac5910a6d7260da14a",
+    "negative-fixtures.json": "b633291834c0b3892531a6ba68d136351665836f05b6619b164d76deab5e8eb5"
+  },
+  "oracle": "queue AUTHORIZED iff registered fixture action, matching required depth, own evidence and required_depth <= engagement_depth",
+  "evidence_scope": "Deterministic queue eligibility only; no PostgreSQL, durable grant, ToolTask, Kali Worker, or receipt",
+  "matrix_pass": 49,
+  "matrix_total": 49,
+  "pilot_pass": 14,
+  "pilot_total": 14,
+  "negative_pass": 4,
+  "negative_total": 4,
+  "unauthorized_execution_count": "NOT_MEASURED_NO_EXECUTION",
+  "authorization_escape": "NOT_MEASURED_NO_RUNTIME_EXECUTION",
+  "runtime_enforcement_result": "NOT_RUN",
+  "trace_completeness": "NOT_MEASURED_NO_DURABLE_TRACE"
+}

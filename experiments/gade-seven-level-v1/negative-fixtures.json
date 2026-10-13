@@ -1,0 +1,34 @@
+[
+  {
+    "scenario_id": "missing-evidence",
+    "expected_decision": "EVIDENCE_INSUFFICIENT",
+    "actual_decision": "EVIDENCE_INSUFFICIENT",
+    "decision_reason": "EVIDENCE_REQUIRED",
+    "pass": true,
+    "trace_id": null
+  },
+  {
+    "scenario_id": "unrelated-evidence",
+    "expected_decision": "EVIDENCE_INSUFFICIENT",
+    "actual_decision": "EVIDENCE_INSUFFICIENT",
+    "decision_reason": "EVIDENCE_ACTION_MISMATCH",
+    "pass": true,
+    "trace_id": null
+  },
+  {
+    "scenario_id": "unregistered-action",
+    "expected_decision": "UNSUPPORTED_ACTION",
+    "actual_decision": "UNSUPPORTED_ACTION",
+    "decision_reason": "ACTION_NOT_REGISTERED",
+    "pass": true,
+    "trace_id": null
+  },
+  {
+    "scenario_id": "required-depth-mismatch",
+    "expected_decision": "DENIED_BY_POLICY",
+    "actual_decision": "DENIED_BY_POLICY",
+    "decision_reason": "ACTION_DEPTH_MISMATCH",
+    "pass": true,
+    "trace_id": null
+  }
+]

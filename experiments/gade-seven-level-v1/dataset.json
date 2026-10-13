@@ -1,0 +1,37 @@
+[
+  {
+    "level": 1,
+    "action": "fixture.depth.1",
+    "evidence_ref": "fixture:evidence:depth:1"
+  },
+  {
+    "level": 2,
+    "action": "fixture.depth.2",
+    "evidence_ref": "fixture:evidence:depth:2"
+  },
+  {
+    "level": 3,
+    "action": "fixture.depth.3",
+    "evidence_ref": "fixture:evidence:depth:3"
+  },
+  {
+    "level": 4,
+    "action": "fixture.depth.4",
+    "evidence_ref": "fixture:evidence:depth:4"
+  },
+  {
+    "level": 5,
+    "action": "fixture.depth.5",
+    "evidence_ref": "fixture:evidence:depth:5"
+  },
+  {
+    "level": 6,
+    "action": "fixture.depth.6",
+    "evidence_ref": "fixture:evidence:depth:6"
+  },
+  {
+    "level": 7,
+    "action": "fixture.depth.7",
+    "evidence_ref": "fixture:evidence:depth:7"
+  }
+]
