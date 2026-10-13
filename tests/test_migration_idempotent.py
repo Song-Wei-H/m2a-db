@@ -43,3 +43,12 @@ def test_migration_sql_files_avoid_non_idempotent_create_index():
         sql = path.read_text(encoding="utf-8").lower()
         assert "create index " not in sql
         assert "create unique index " not in sql
+
+
+def test_validation_coverage_migration_is_additive_and_preserves_legacy_rows():
+    sql = Path("initdb/036_validation_coverage_semantics.sql").read_text(encoding="utf-8").lower()
+    assert "add column if not exists validation_coverage" in sql
+    assert "default 'not_evaluated'" in sql
+    assert "create index if not exists" in sql
+    assert "update vulnerability_candidates" not in sql
+    assert "delete from vulnerability_candidates" not in sql

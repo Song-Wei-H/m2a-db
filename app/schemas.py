@@ -8,12 +8,29 @@ class TargetCreate(BaseModel):
     target: str = Field(..., max_length=255, examples=["192.0.2.10"])
     target_type: Literal["ip", "domain", "cidr"] = "ip"
     scope: Literal["internal", "external"] = "internal"
+    authorization_depth: int = Field(default=1, ge=1, le=7)
 
 
 class TargetCreateResponse(BaseModel):
     target_id: int
     scan_run_id: int
     status: str
+    authorization_depth: int = 1
+
+
+class AttackAuthorizationDepthUpdate(BaseModel):
+    authorization_depth: int = Field(ge=1, le=7)
+    expires_at: datetime | None = None
+
+
+class TargetAuthorizationProfile(BaseModel):
+    target_id: int
+    authorization_depth: int
+    policy_version: str
+    scope: str | None = None
+    effective_from: datetime
+    expires_at: datetime | None = None
+    configured_by: str
 
 
 class TargetRunStatusResponse(BaseModel):

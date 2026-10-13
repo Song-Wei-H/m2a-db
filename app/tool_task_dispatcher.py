@@ -13,7 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.execution_governance import ACTION_BY_TOOL, canonical_parameters, propose_and_authorize
+from app.execution_governance import ACTION_BY_TOOL, canonical_parameters, evaluate_and_authorize as propose_and_authorize
+from app.execution_trace import context_evidence
 from app.models import OpenPort, Target, ToolRegistry, ToolRequest
 from app.security.llm_schema import LlmToolProposal
 from app.security.tool_policy import (
@@ -53,7 +54,18 @@ async def _reject_task(
     tool_name: str,
     reason: str,
     open_port_id: int | None = None,
+    raw_payload: Any = None,
 ) -> DispatchResult:
+    if target_id is not None:
+        target = await db.get(Target, target_id)
+        if isinstance(target, Target):
+            port = await db.get(OpenPort, open_port_id) if open_port_id else None
+            await propose_and_authorize(
+                db, target=target, tool_name=tool_name, parameters={}, reason=reason,
+                confidence=None, provider="llm-proposal", authorization_source="dispatcher-validation",
+                raw_proposal={"payload": raw_payload, "selected_action": tool_name},
+                evidence_refs=context_evidence(target, port), denial_reason=reason,
+            )
     if target_id is None:
         logger.warning("tool_task rejected (no DB row): %s", reason)
         return DispatchResult(
@@ -126,6 +138,7 @@ async def dispatch_llm_tool_proposal(
             target_id=target_id,
             tool_name=tool_hint,
             reason="LLM payload contains disallowed keys",
+            raw_payload=raw_payload,
             open_port_id=open_port_id,
         )
 
@@ -137,6 +150,7 @@ async def dispatch_llm_tool_proposal(
             target_id=target_id,
             tool_name=tool_hint,
             reason=f"LLM validation failed: {exc}",
+            raw_payload=raw_payload,
             open_port_id=open_port_id,
         )
 
@@ -148,6 +162,7 @@ async def dispatch_llm_tool_proposal(
             target_id=target_id,
             tool_name=template_tool,
             reason=f"Tool {template_tool!r} not allowed by config",
+            raw_payload=raw_payload,
             open_port_id=open_port_id,
         )
 
@@ -162,6 +177,7 @@ async def dispatch_llm_tool_proposal(
                 target_id=None,
                 tool_name=template_tool,
                 reason=f"Target {proposal.target!r} not registered",
+                raw_payload=raw_payload,
                 open_port_id=open_port_id,
             )
         target_id = target_row.id
@@ -177,6 +193,7 @@ async def dispatch_llm_tool_proposal(
                 target_id=target_id,
                 tool_name=template_tool,
                 reason=f"Target mismatch for id {target_id}",
+                raw_payload=raw_payload,
                 open_port_id=open_port_id,
             )
 
@@ -240,9 +257,11 @@ async def dispatch_llm_tool_proposal(
             confidence=None,
             provider="llm-proposal",
             authorization_source="gade-tier-policy",
+            raw_proposal={"selected_action": ACTION_BY_TOOL[template_tool], "payload": raw_payload},
+            evidence_refs=context_evidence(target_row, port_row),
         )
         if governed.authorization is None:
-            return DispatchResult(False, None, "pending_human_approval", "Human authorization required", proposal)
+            return DispatchResult(False, None, governed.proposal.status, governed.evaluation.reason, proposal)
 
     approval_required, approval_status, approval_reason = _determine_approval_from_risk_level(
         template_tool, proposal.risk_level

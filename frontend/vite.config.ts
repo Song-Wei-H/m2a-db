@@ -6,6 +6,7 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      "/authorization": process.env.VITE_M2A_PROXY_TARGET ?? "http://127.0.0.1:8000",
       "/targets": process.env.VITE_M2A_PROXY_TARGET ?? "http://127.0.0.1:8000",
       "/dashboard": process.env.VITE_M2A_PROXY_TARGET ?? "http://127.0.0.1:8000",
       "/decisions": process.env.VITE_M2A_PROXY_TARGET ?? "http://127.0.0.1:8000",

@@ -12,7 +12,12 @@ import type {
   PendingApproval,
   AutomationStatus
 } from "./types";
-import type { ReportExportResponse } from "./types";
+import type {
+  AttackAuthorizationLevelsResponse,
+  AuthorizationDecision,
+  ReportExportResponse,
+  TargetAuthorizationProfile
+} from "./types";
 
 const DEFAULT_API_BASE = import.meta.env.VITE_M2A_API_BASE ?? "";
 
@@ -58,6 +63,14 @@ export const api = {
   dashboardOverview: () => request<DashboardOverview>("/dashboard/overview"),
   createTarget: (payload: TargetCreatePayload) =>
     request<TargetCreateResponse>("/targets", { method: "POST", body: JSON.stringify(payload) }),
+  attackAuthorizationLevels: () => request<AttackAuthorizationLevelsResponse>("/authorization/attack-levels"),
+  targetAuthorization: (targetId: number) => request<TargetAuthorizationProfile>(`/targets/${targetId}/authorization`),
+  updateTargetAuthorization: (targetId: number, authorization_depth: number) =>
+    request<TargetAuthorizationProfile>(`/targets/${targetId}/authorization`, {
+      method: "PUT", body: JSON.stringify({ authorization_depth })
+    }),
+  targetAuthorizationDecisions: (targetId: number) =>
+    request<AuthorizationDecision[]>(`/targets/${targetId}/authorization-decisions`),
   targetSummary: (targetId: number) => request<TargetSummary>(`/targets/${targetId}/summary`),
   targetReport: (targetId: number) => request<TargetReport>(`/targets/${targetId}/report`),
   targetRunStatus: (targetId: number) => request<RunStatus>(`/targets/${targetId}/run-status`),

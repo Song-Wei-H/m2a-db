@@ -12,6 +12,27 @@ NUCLEI_TEXT_RE = re.compile(
     r"^\[(?P<template_id>[^\]]+)\]\s+\[(?P<protocol>[^\]]+)\]\s+\[(?P<severity>[^\]]+)\]\s+(?P<url>\S+)(?:\s+\[(?P<matcher>[^\]]+)\])?",
     re.IGNORECASE,
 )
+CVE_ID_RE = re.compile(r"\bCVE-\d{4}-\d{4,}\b", re.IGNORECASE)
+
+
+def _cve_ids(payload: dict[str, Any], info: dict[str, Any]) -> list[str]:
+    classification = info.get("classification") if isinstance(info.get("classification"), dict) else {}
+    candidates = [
+        payload.get("cve_ids"), payload.get("cve_id"), payload.get("cve"),
+        classification.get("cve-id"), classification.get("cve_id"),
+    ]
+    tags = info.get("tags") or payload.get("tags")
+    if isinstance(tags, str):
+        candidates.append(tags.split(","))
+    elif isinstance(tags, list):
+        candidates.append(tags)
+    found: set[str] = set()
+    for value in candidates:
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            if isinstance(item, str):
+                found.update(match.upper() for match in CVE_ID_RE.findall(item))
+    return sorted(found)
 
 
 def _finding_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -28,6 +49,7 @@ def _finding_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "template_id": payload.get("template-id") or payload.get("template_id") or payload.get("id"),
         "name": info.get("name") or payload.get("name"),
         "severity": info.get("severity") or payload.get("severity"),
+        "cve_ids": _cve_ids(payload, info),
         "url": url,
         "matched_url": url,
         "matched_at": url,
@@ -47,6 +69,7 @@ def _finding_from_text(line: str) -> dict[str, Any] | None:
     parsed = urlparse(data["url"])
     return {
         "template_id": data["template_id"],
+        "cve_ids": sorted({match.upper() for match in CVE_ID_RE.findall(data["template_id"])}),
         "severity": data["severity"].lower() if data.get("severity") else None,
         "url": data["url"],
         "matched_url": data["url"],

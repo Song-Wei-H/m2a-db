@@ -14,6 +14,18 @@ ACTION_BY_TOOL = {
     "ssh-enum": "ssh.algorithms_enum.v1",
     "mysql-info": "mysql.server_info.v1",
 }
+# M2A engagement-depth requirements are part of the immutable server-side
+# Action Contract. LLM proposals cannot provide or override these values.
+ACTION_REQUIRED_ATTACK_DEPTH = {
+    "http_security_headers.collect.v1": 1,  # bounded HEAD-only configuration check
+    "nuclei.safe_scan.v1": 1,  # fixed critical/high safe-scan contract
+    "dns.metadata_collect.v1": 1,  # bounded DNS metadata collection
+    "tls.certificate_collect.v1": 1,  # certificate metadata only
+    "nmap.service_fingerprint.v1": 1,  # service/version discovery; no scripts/port override
+    "httpx.web_probe.v1": 1,  # bounded root-path HTTP probe; no redirects
+    "ssh.algorithms_enum.v1": 1,  # unauthenticated SSH algorithm enumeration only
+    "mysql.server_info.v1": 1,  # unauthenticated server metadata only
+}
 TOOL_BY_ACTION = {action: tool for tool, action in ACTION_BY_TOOL.items()}
 PROTECTED_ACTION_TOOLS = frozenset(ACTION_BY_TOOL)
 

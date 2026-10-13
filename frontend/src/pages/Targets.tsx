@@ -1,4 +1,4 @@
-import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDownUp, Plus, Search, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -13,6 +13,7 @@ import { Select } from "../components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "../components/ui/table";
 import { useKnownTargets } from "../hooks/useKnownTargets";
 import { useToast } from "../components/ToastProvider";
+import { AttackAuthorizationMatrix } from "../components/AttackAuthorizationMatrix";
 
 export function TargetsPage() {
   const navigate = useNavigate();
@@ -23,7 +24,8 @@ export function TargetsPage() {
   const [status, setStatus] = useState("all");
   const [sort, setSort] = useState<"risk" | "target" | "round">("risk");
   const [lookupId, setLookupId] = useState("");
-  const [newTarget, setNewTarget] = useState<TargetCreatePayload>({ target: "", target_type: "ip", scope: "internal" });
+  const [newTarget, setNewTarget] = useState<TargetCreatePayload>({ target: "", target_type: "ip", scope: "internal", authorization_depth: 1 });
+  const authorizationLevels = useQuery({ queryKey: ["attack-authorization-levels"], queryFn: api.attackAuthorizationLevels });
 
   const queries = useQueries({
     queries: knownTargets.ids.map((id) => ({
@@ -163,7 +165,19 @@ export function TargetsPage() {
                   <option value="external">外部</option>
                 </Select>
               </div>
-              <Button className="w-full" disabled={!newTarget.target || createTarget.isPending} onClick={() => createTarget.mutate(newTarget)}>
+              {authorizationLevels.data ? (
+                <AttackAuthorizationMatrix
+                  levels={authorizationLevels.data.levels}
+                  value={newTarget.authorization_depth}
+                  onChange={(authorization_depth) => setNewTarget({ ...newTarget, authorization_depth })}
+                  compact
+                />
+              ) : authorizationLevels.isError ? (
+                <p className="text-sm text-red-300">無法載入授權層級：{authorizationLevels.error.message}</p>
+              ) : (
+                <p className="text-sm text-muted-foreground">載入授權層級…</p>
+              )}
+              <Button className="w-full" disabled={!newTarget.target || createTarget.isPending || !authorizationLevels.data} onClick={() => createTarget.mutate(newTarget)}>
                 <Plus className="h-4 w-4" />
                 建立
               </Button>

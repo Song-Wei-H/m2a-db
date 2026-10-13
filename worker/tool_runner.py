@@ -39,6 +39,7 @@ class TaskContext:
     execution_identity: str | None = None
     authorization_parameters: dict | None = None
     authorization_parameters_hash: str | None = None
+    authorization_id: int | None = None
 
 
 @dataclass
@@ -49,6 +50,7 @@ class ToolRunOutcome:
     success: bool
     status: str
     error_message: str | None = None
+    execution_receipt: dict | None = None
 
 
 def build_command(ctx: TaskContext, template_row) -> tuple[list[str], str]:

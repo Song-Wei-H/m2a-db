@@ -79,6 +79,13 @@ class TestParsers(unittest.TestCase):
         self.assertEqual(result["finding_count"], 1)
         self.assertEqual(result["findings"][0]["template_id"], "tech-detect")
 
+    def test_nuclei_normalizes_structured_cve_metadata(self):
+        output = ('{"template-id":"http/example-check","info":{"name":"Example",'
+                  '"severity":"high","classification":{"cve-id":["CVE-2025-12345"]}},'
+                  '"matched-at":"https://example.com"}')
+        result = parse_nuclei_output(output, host="example.com", port=443)
+        self.assertEqual(result["findings"][0]["cve_ids"], ["CVE-2025-12345"])
+
     def test_dirb_parser(self):
         output = "+ http://example.com/admin (CODE:200|SIZE:1234)\n==> DIRECTORY: http://example.com/assets/"
         result = parse_dirb_output(output)

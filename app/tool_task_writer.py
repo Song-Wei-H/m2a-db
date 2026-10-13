@@ -40,7 +40,8 @@ async def create_tool_task_if_not_exists(
     session: AsyncSession,
     **values: Any,
 ) -> tuple[ToolTask | None, bool]:
-    await _adapt_migrated_action(session, values)
+    if not await _adapt_migrated_action(session, values):
+        return None, False
     target_id = values["target_id"]
     open_port_id = values.get("open_port_id")
     tool_name = values["tool_name"]
@@ -104,7 +105,7 @@ async def create_tool_task_if_not_exists(
     return task, True
 
 
-async def _adapt_migrated_action(session: AsyncSession, values: dict[str, Any]) -> None:
+async def _adapt_migrated_action(session: AsyncSession, values: dict[str, Any]) -> bool:
     target_id = values["target_id"]
     open_port_id = values.get("open_port_id")
     tool_name = values["tool_name"]
@@ -112,31 +113,40 @@ async def _adapt_migrated_action(session: AsyncSession, values: dict[str, Any]) 
         if (not values.get("execution_authorization_id")
                 or values.get("action_id") != ACTION_BY_TOOL[tool_name]
                 or not values.get("investigation_id")):
-            from app.execution_governance import canonical_parameters, propose_and_authorize
-            from app.models import OpenPort, Target
+            from app.execution_governance import canonical_parameters, evaluate_and_authorize
+            from app.execution_trace import context_evidence
+            from app.models import DecisionScore, OpenPort, Target
             target = await session.get(Target, target_id)
             port_row = await session.get(OpenPort, open_port_id) if open_port_id else None
             if target is None:
                 raise ValueError(f"target_id={target_id} not found")
             action_id = ACTION_BY_TOOL[tool_name]
-            governed = await propose_and_authorize(
+            decision_id = values.get("decision_score_id")
+            decision = await session.get(DecisionScore, decision_id) if decision_id else None
+            parameters = canonical_parameters(
+                target=target.target, port=port_row.port if port_row else None,
+                protocol=port_row.protocol if port_row else None,
+                service=port_row.service if port_row else None, action_id=action_id,
+            )
+            governed = await evaluate_and_authorize(
                 session, target=target, tool_name=tool_name,
-                parameters=canonical_parameters(
-                    target=target.target, port=port_row.port if port_row else None,
-                    protocol=port_row.protocol if port_row else None,
-                    service=port_row.service if port_row else None, action_id=action_id,
-                ),
+                parameters=parameters,
+                raw_proposal={"selected_action": action_id, "proposed_parameters": parameters,
+                              "source": "deterministic-writer"},
+                evidence_refs=context_evidence(target, port_row, decision if isinstance(decision, DecisionScore) else None),
+                decision_score_id=decision_id,
                 reason=str(values.get("proposal_reason") or values.get("approval_reason")
                            or "Legacy creation path adapted by canonical ToolTask writer"),
                 confidence=None, provider="legacy-governance-adapter",
                 authorization_source="gade-tier-policy",
             )
             if governed.authorization is None:
-                raise ValueError(f"Human authorization required for {action_id}")
+                return False
             values.update(investigation_id=governed.proposal.investigation_id,
                           action_id=governed.action.action_id,
                           execution_authorization_id=governed.authorization.id,
                           approval_required=False, approval_status="not_required")
+    return True
 
 
 async def create_retest_tool_task(
@@ -150,7 +160,8 @@ async def create_retest_tool_task(
     """
     if not str(values.get("proposal_reason") or "").strip():
         raise ValueError("retest proposal_reason is required")
-    await _adapt_migrated_action(session, values)
+    if not await _adapt_migrated_action(session, values):
+        return None
     task = ToolTask(**values)
     session.add(task)
     await session.flush()

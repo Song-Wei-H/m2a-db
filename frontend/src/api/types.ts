@@ -118,6 +118,20 @@ export type TargetReport = {
   learning_feedback: LearningFeedback[];
   remediation: Array<Record<string, unknown>>;
   matched_cves: Array<Record<string, unknown>>;
+  vulnerability_queue?: Array<{
+    candidate_id: number; cve: string; open_port_id?: number | null; service?: string | null;
+    validation_coverage?: "COVERED" | "NOT_COVERED" | "UNKNOWN" | "NOT_EVALUATED";
+    priority?: number; required_depth?: number | null; status: string; evidence_refs?: string[];
+    terminal_reason?: string | null;
+  }>;
+  vulnerability_coverage?: {
+    total_candidates: number; terminal_candidates: number; verified: number; not_verified: number;
+    disposition_coverage_rate?: number; validation_coverage_rate?: number;
+    validation_coverage_candidates?: number; technically_covered_candidates?: number;
+    denied_by_depth: number; evidence_insufficient: number; unsupported_action: number;
+    coverage_rate: number; eligible_validation_completion_rate: number; omission_count: number;
+    legacy_untracked_candidate_contexts?: number; legacy_note?: string;
+  };
   cve_candidate_summary?: Record<string, unknown>;
   tool_tasks: ToolTask[];
   normalized_results: Array<Record<string, unknown>>;
@@ -148,12 +162,56 @@ export type TargetCreatePayload = {
   target: string;
   target_type: "ip" | "domain" | "cidr";
   scope: "internal" | "external";
+  authorization_depth: number;
 };
 
 export type TargetCreateResponse = {
   target_id: number;
   scan_run_id: number;
   status: string;
+  authorization_depth: number;
+};
+
+export type AttackAuthorizationLevel = {
+  level: number;
+  key: string;
+  name_zh: string;
+  tactics: string[];
+  description: string;
+  cumulative: number[];
+  registered_actions: string[];
+};
+
+export type AttackAuthorizationLevelsResponse = {
+  policy_version: string;
+  model_note: string;
+  levels: AttackAuthorizationLevel[];
+};
+
+export type TargetAuthorizationProfile = {
+  target_id: number;
+  authorization_depth: number;
+  policy_version: string;
+  scope?: string | null;
+  effective_from: string;
+  expires_at?: string | null;
+  configured_by: string;
+};
+
+export type AuthorizationDecision = {
+  proposal_id: number;
+  decision_score_id?: number | null;
+  action_id: string;
+  outcome: "ALLOW" | "DENY" | "PENDING" | "UNAVAILABLE" | string;
+  reason: string;
+  reason_code?: string | null;
+  engagement_depth?: number | null;
+  required_depth?: number | null;
+  depth_check?: string | null;
+  evidence_check?: string | null;
+  scope_check?: string | null;
+  approval_check?: string | null;
+  created_at?: string | null;
 };
 
 export type PendingApproval = {

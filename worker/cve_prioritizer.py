@@ -31,7 +31,8 @@ def _rank(item: dict[str, Any]) -> tuple[float, float, float, float, str]:
         score,
         cvss,
         epss,
-        str(item.get("cve_id") or item.get("cve") or ""),
+        f"{str(item.get('cve_id') or item.get('cve') or '')}:"
+        f"{str(item.get('open_port_id') if item.get('open_port_id') is not None else 'target')}",
     )
 
 
@@ -49,14 +50,16 @@ def _mandatory(item: dict[str, Any]) -> bool:
 
 def prioritize_cve_candidates(candidates: Iterable[dict[str, Any]], display_budget: int = 50) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Keep all mandatory candidates and fill remaining display budget by risk."""
-    deduped: dict[str, dict[str, Any]] = {}
+    deduped: dict[tuple[str, str], dict[str, Any]] = {}
     for item in candidates:
         cve_id = str(item.get("cve_id") or item.get("cve") or "").upper()
         if not cve_id:
             continue
-        current = deduped.get(cve_id)
+        context = str(item.get("open_port_id") if item.get("open_port_id") is not None else "target")
+        key = (cve_id, context)
+        current = deduped.get(key)
         if current is None or _rank(item) > _rank(current):
-            deduped[cve_id] = item
+            deduped[key] = item
 
     _, evaluated = select_validation_candidates(deduped.values())
     ordered = sorted(evaluated, key=_rank, reverse=True)
@@ -65,7 +68,11 @@ def prioritize_cve_candidates(candidates: Iterable[dict[str, Any]], display_budg
     # Report rendering is a strict presentation budget. Mandatory status still
     # affects ranking/summary, but cannot expand an unbounded product list.
     selected = ordered[: max(display_budget, 0)]
-    selected_ids = {str(item.get("cve_id") or item.get("cve")) for item in selected}
+    selected_ids = {
+        (str(item.get("cve_id") or item.get("cve")).upper(),
+         str(item.get("open_port_id") if item.get("open_port_id") is not None else "target"))
+        for item in selected
+    }
     match_types = Counter(str(item.get("match_type") or "unknown") for item in ordered)
     summary = {
         "total_candidates": len(ordered),
@@ -76,7 +83,8 @@ def prioritize_cve_candidates(candidates: Iterable[dict[str, Any]], display_budg
         "critical_candidates": sum(str(item.get("severity") or "").lower() == "critical" for item in ordered),
         "exact_version_candidates": match_types.get("exact_cpe_version", 0),
         "product_only_candidates": match_types.get("cpe_product_only", 0),
-        "selected_cve_ids": sorted(selected_ids),
+        "selected_cve_ids": sorted({item[0] for item in selected_ids}),
+        "selected_candidate_contexts": len(selected_ids),
         "validation_selected_candidates": sum(bool(item.get("selected_for_validation")) for item in ordered),
         "selection_policy": "strict Top-N by validation priority; mandatory attributes influence rank but never bypass the display budget",
     }

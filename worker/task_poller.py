@@ -22,6 +22,7 @@ from app.tool_task_constants import (
     RUNNING,
 )
 from app.tool_task_state import tool_task_status_values
+from app.execution_trace import execution_request, result_output
 from worker.parsers.nmap_parser import parse_nmap_output
 from worker.tool_runner import TaskContext, run_tool
 from worker.safety import validate_task_execution
@@ -161,9 +162,15 @@ async def _persist_result(db: AsyncSession, ctx: TaskContext, outcome) -> int:
         success=outcome.success,
         evidence=outcome.error_message,
         risk_level=_infer_risk_level(ctx.tool_name, outcome),
+        execution_receipt=getattr(outcome, "execution_receipt", None),
     )
+    row.output_hash = parameter_hash(result_output(row))
     db.add(row)
     await db.flush()
+
+    if ctx.tool_name == "nuclei_safe":
+        from app.vulnerability_queue import apply_validation_result
+        await apply_validation_result(db, target_id=ctx.target_id, open_port_id=ctx.open_port_id, result=row)
 
     if outcome.success and ctx.tool_name == "httpx_basic":
         try:
@@ -281,6 +288,7 @@ async def _fail_task(
             success=False,
             evidence=reason,
         )
+        row.output_hash = parameter_hash(result_output(row))
         db.add(row)
         await db.flush()
         
@@ -382,11 +390,15 @@ async def execute_task(task_id: int) -> None:
                 or authorization.parameters_hash != parameter_hash(actual_parameters)
             ):
                 await db.execute(update(ToolTask).where(ToolTask.id == task.id).values(
+                    execution_audit={"stage": "pre-dispatch", "handler_invoked": False,
+                                     "observed_parameters": actual_parameters,
+                                     "reason": "Authorization parameter identity mismatch"},
                     **tool_task_status_values(RUNNING, REJECTED, reject_reason="Authorization parameter identity mismatch")
                 ))
                 return
             ctx = TaskContext(
                 **{**ctx.__dict__, "execution_identity": authorization.execution_identity,
+                   "authorization_id": authorization.id,
                    "authorization_parameters": authorization.canonical_parameters,
                    "authorization_parameters_hash": authorization.parameters_hash}
             )
@@ -421,6 +433,11 @@ async def execute_task(task_id: int) -> None:
                 task.id,
             )
             return
+
+        request = execution_request(ctx)
+        task.execution_request = request
+        task.execution_request_hash = parameter_hash(request)
+        task.execution_audit = {"stage": "prepared", "handler_invoked": None}
 
     if ctx is None or template_row is None or task_snapshot is None:
         logger.error("tool_task_id=%s missing execution context", task_id)

@@ -173,6 +173,18 @@ Get-Content -Raw .\initdb\031_phase3_batch3_httpx_identity.sql |
 
 Get-Content -Raw .\initdb\032_phase3_batch4_ssh_mysql_identity.sql |
   docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
+
+Get-Content -Raw .\initdb\033_execution_trace.sql |
+  docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
+
+Get-Content -Raw .\initdb\034_attack_authorization_depth.sql |
+  docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
+
+Get-Content -Raw .\initdb\035_vulnerability_work_queue.sql |
+  docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
+
+Get-Content -Raw .\initdb\036_validation_coverage_semantics.sql |
+  docker exec -i m2a-postgres psql -v ON_ERROR_STOP=1 -U m2a_user -d m2a_pentest
 ```
 
 若 API 報告 `column tool_tasks.approved_at does not exist`，代表既有 volume 漏套 021；先執行 021，再執行 024。
@@ -190,11 +202,17 @@ Migration 027 建立 authorization-first 基礎；028–032 完成 Phase 3 Batch
 目前 8 個 action 由 Registry 決定 tier、template version 與 execution
 identity：`http_security_headers`、`nuclei_safe`、`dns_metadata`、
 `tls_certificate`、`nmap_service`、`httpx_basic`、`ssh-enum`、`mysql-info`。
+七層 Engagement Authorization Depth 由同一後端 Action Contract 深度表約束這 8 個 action；
+`dirb_safe` 尚未遷移 Action Contract，因此不在此矩陣的授權涵蓋範圍內。
 其 ExecutionAuthorization 綁定 target、canonical parameters、parameter
 hash、execution identity、template version、scope、expiry 與單次 execution，
 Worker claim 在同一資料庫交易中消耗 authorization。歷史 approval 不會被
 轉換成 authorization。`dirb_safe` 仍是明確的 legacy／未遷移工具，不得算入
 8-action authorization-first coverage。
+
+Migration 034 為 Target 加上 M2A 的累積授權深度，既有資料安全回填為 Level 1。
+此深度是本系統授權上限，不是 ATT&CK 官方線性階段；Action 的必要深度由後端
+Action Contract 決定，深度檢查也不取代 evidence、scope、approval 或 runtime gates。
 
 ## 5. 每次啟動 SOP
 

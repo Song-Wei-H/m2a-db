@@ -7,9 +7,11 @@ import asyncio
 from typing import Any, Dict
 
 from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session
 from app.models import AutoLoopDecision, DecisionScore, OpenPort, Target, ToolTask
+from app.vulnerability_queue import NON_TERMINAL, refresh_candidate_dispositions
 from app.tool_task_constants import (
     ACTIVE_TASK_STATUSES as DUPLICATE_PREVENTION_STATUSES,
     APPROVED,
@@ -387,6 +389,11 @@ async def finalize_target_if_idle(
 
     target = await session.get(Target, target_id)
     if target is None:
+        return False
+
+    candidates = await refresh_candidate_dispositions(session, target_id=target_id) if isinstance(session, AsyncSession) else []
+    if any(candidate.status in NON_TERMINAL for candidate in candidates):
+        logger.info("target_id=%s not completed: vulnerability candidates remain unresolved", target_id)
         return False
 
     current_round = target.current_round or 1

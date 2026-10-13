@@ -8,6 +8,7 @@ import shlex
 import socket
 import ssl
 import subprocess
+from contextvars import ContextVar
 from typing import Any
 
 from fastapi import FastAPI
@@ -17,6 +18,7 @@ from app.action_contracts import (
 )
 
 app = FastAPI(title="M2A Kali Worker", version="evidence-tools-v1")
+_authorized_argv: ContextVar[list[str] | None] = ContextVar("authorized_argv", default=None)
 
 ALLOWED_TOOLS = {
     "nmap_service", "httpx_basic", "nuclei_safe", "dirb_safe",
@@ -43,6 +45,8 @@ class ExecuteRequest(BaseModel):
     execution_identity: str | None = None
     authorization_parameters: dict[str, Any] | None = None
     authorization_parameters_hash: str | None = None
+    task_id: int | None = None
+    authorization_id: int | None = None
 
 
 def canonical_parameters(req: ExecuteRequest) -> dict[str, Any]:
@@ -95,6 +99,10 @@ def resolve_target(target: str) -> list[str]:
 
 
 def run_command(command: list[str]) -> dict[str, Any]:
+    expected = _authorized_argv.get()
+    if expected is not None and command != expected:
+        return {"status": "rejected", "error": "actual argv differs from authorization",
+                "execution_argv": list(command), "raw_output": "", "subprocess_started": False}
     try:
         result = subprocess.run(
             command, capture_output=True, text=True, timeout=180,
@@ -105,18 +113,21 @@ def run_command(command: list[str]) -> dict[str, Any]:
             "command": " ".join(shlex.quote(value) for value in command),
             "returncode": result.returncode,
             "raw_output": result.stdout + result.stderr,
+            "execution_argv": list(command), "subprocess_started": True,
         }
     except subprocess.TimeoutExpired:
         return {
             "status": "failed",
             "command": " ".join(shlex.quote(value) for value in command),
             "error": "command timeout", "raw_output": "",
+            "execution_argv": list(command), "subprocess_started": True,
         }
     except Exception as exc:
         return {
             "status": "failed",
             "command": " ".join(shlex.quote(value) for value in command),
             "error": f"{type(exc).__name__}: {exc}", "raw_output": "",
+            "execution_argv": list(command), "subprocess_started": None,
         }
 
 
@@ -284,7 +295,10 @@ def health() -> dict[str, Any]:
 def execute(req: ExecuteRequest) -> dict[str, Any]:
     if req.tool not in ALLOWED_TOOLS:
         return {"status": "rejected", "reason": "tool not allowed", "tool": req.tool}
-    identity_error = validate_execution_identity(req)
+    try:
+        identity_error = validate_execution_identity(req)
+    except (ValueError, TypeError) as exc:
+        identity_error = str(exc)
     if identity_error:
         return {"status": "rejected", "reason": identity_error, "tool": req.tool}
     try:
@@ -304,4 +318,20 @@ def execute(req: ExecuteRequest) -> dict[str, Any]:
         "http_security_headers": lambda: run_http_security_headers(req.target, req.port, req.service, authorized_url),
         "dns_metadata": lambda: run_dns_metadata(req.target, addresses),
     }
-    return handlers[req.tool]()
+    token = _authorized_argv.set((req.authorization_parameters or {}).get("argv"))
+    try:
+        result = handlers[req.tool]()
+    finally:
+        _authorized_argv.reset(token)
+    observed = canonical_parameters(req)
+    if "execution_argv" in result:
+        observed["argv"] = result["execution_argv"]
+    result["execution_receipt"] = {
+        "task_id": req.task_id, "authorization_id": req.authorization_id,
+        "request_hash": parameters_hash(req.model_dump()),
+        "executed_action": req.action_id, "executed_parameters": observed,
+        "execution_identity": req.execution_identity, "handler_invoked": True,
+        "subprocess_started": result.get("subprocess_started"),
+        "observation": "handler invocation / actual argv; no destination attestation",
+    }
+    return result

@@ -5,6 +5,50 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 
+class TargetCreationSession:
+    def __init__(self):
+        self.rows = []
+        self.next_id = 1
+
+    def begin(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        return False
+
+    def add(self, row):
+        self.rows.append(row)
+
+    async def flush(self):
+        for row in self.rows:
+            if getattr(row, "id", None) is None:
+                row.id = self.next_id
+                self.next_id += 1
+
+
+def test_each_new_assessment_gets_its_own_target_authorization_scope():
+    import asyncio
+    from app.api.targets import create_target
+    from app.schemas import TargetCreate
+
+    db = TargetCreationSession()
+    async def fake_create_task(*args, **kwargs):
+        return None
+
+    async def run():
+        with patch("app.api.targets.create_tool_task_if_not_exists", fake_create_task):
+            first = await create_target(TargetCreate(target="198.51.100.20", authorization_depth=2), db)
+            second = await create_target(TargetCreate(target="198.51.100.20", authorization_depth=5), db)
+        targets = [row for row in db.rows if row.__class__.__name__ == "Target"]
+        assert first.target_id != second.target_id
+        assert [row.authorization_depth for row in targets] == [2, 5]
+
+    asyncio.run(run())
+
+
 def sample_report():
     target_summary = {
         "target_id": 1,

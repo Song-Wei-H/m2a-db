@@ -5,6 +5,7 @@ from typing import Any, Dict, Iterable
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import load_only
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session
 from app.models import (
@@ -20,11 +21,13 @@ from app.models import (
     Target,
     ToolResult,
     ToolTask,
+    VulnerabilityCandidate,
 )
 from app.config import settings
 from worker.cve_prioritizer import prioritize_cve_candidates
 from worker.cve_validation_policy import evaluate_candidate, select_validation_candidates
 from worker.cve_trace import build_cve_validation_trace
+from app.vulnerability_queue import coverage_metrics
 
 __all__ = ["generate_target_report"]
 
@@ -522,6 +525,14 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             )
         ).scalars().all()
 
+        vulnerability_candidates = (
+            await session.execute(
+                select(VulnerabilityCandidate)
+                .where(VulnerabilityCandidate.target_id == target_id)
+                .order_by(VulnerabilityCandidate.priority.desc(), VulnerabilityCandidate.candidate_key)
+            )
+        ).scalars().all() if isinstance(session, AsyncSession) else []
+
         port_by_id = {port.id: port for port in ports}
         cves_by_port: dict[int, list[dict[str, Any]]] = {}
         matched_cves = []
@@ -613,18 +624,50 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
                 "applicability_notice": "Product-level correlation does not confirm vulnerability applicability.",
             }
         )
-        selected_cve_ids = {str(item.get("cve_id") or item.get("cve")) for item in prioritized_cves}
+        selected_candidate_contexts = {
+            (str(item.get("cve_id") or item.get("cve")).upper(),
+             str(item.get("open_port_id") if item.get("open_port_id") is not None else "target"))
+            for item in prioritized_cves
+        }
         prioritized_by_id = {
-            str(item.get("cve_id") or item.get("cve")): item for item in prioritized_cves
+            (str(item.get("cve_id") or item.get("cve")).upper(),
+             str(item.get("open_port_id") if item.get("open_port_id") is not None else "target")): item
+            for item in prioritized_cves
         }
         cves_by_port = {
             port_id: [
-                prioritized_by_id[str(item.get("cve_id") or item.get("cve"))]
+                prioritized_by_id[(str(item.get("cve_id") or item.get("cve")).upper(), str(item.get("open_port_id")))]
                 for item in items
-                if str(item.get("cve_id") or item.get("cve")) in selected_cve_ids
+                if (str(item.get("cve_id") or item.get("cve")).upper(), str(item.get("open_port_id"))) in selected_candidate_contexts
             ]
             for port_id, items in cves_by_port.items()
         }
+        vulnerability_queue = [
+            {
+                "candidate_id": row.id, "cve": row.cve, "open_port_id": row.open_port_id,
+                "service": row.service, "priority": row.priority,
+                "required_action": row.required_action, "required_depth": row.required_attack_depth,
+                "evidence_refs": row.evidence_refs or [], "status": row.status,
+                "validation_coverage": row.validation_coverage,
+                "attempt_count": row.attempt_count, "authorization_decision_id": row.authorization_decision_id,
+                "execution_authorization_id": row.execution_authorization_id,
+                "tool_task_id": row.tool_task_id, "validation_result": row.validation_result,
+                "terminal_reason": row.terminal_reason,
+            }
+            for row in vulnerability_candidates
+        ]
+        vulnerability_coverage = coverage_metrics(vulnerability_candidates)
+        current_candidate_contexts = {
+            (str(item.get("cve_id") or item.get("cve") or "").upper(),
+             str(item.get("open_port_id") if item.get("open_port_id") is not None else "target"))
+            for item in matched_cves
+        }
+        queue_candidate_contexts = {
+            (str(row.cve).upper(), str(row.open_port_id if row.open_port_id is not None else "target"))
+            for row in vulnerability_candidates
+        }
+        vulnerability_coverage["legacy_untracked_candidate_contexts"] = len(current_candidate_contexts - queue_candidate_contexts)
+        vulnerability_coverage["legacy_note"] = "Pre-queue historical CVE matches are not backfilled or treated as evaluated."
         decisions_by_risk = sorted(
             decision_scores,
             key=lambda decision: (_risk_score(decision.risk_score), _severity_rank(decision.severity)),
@@ -698,6 +741,10 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             "decision_count": len(decision_scores),
             "decision_score_count": len(decision_scores),
             "learning_feedback_count": len(learning_feedback),
+            "vulnerability_candidate_count": vulnerability_coverage["total_candidates"],
+            "vulnerability_terminal_count": vulnerability_coverage["terminal_candidates"],
+            "assessment_coverage": vulnerability_coverage["coverage_rate"],
+            "vulnerability_omission_count": vulnerability_coverage["omission_count"],
             "highest_risk_score": highest_risk_decision.risk_score if highest_risk_decision else None,
             "highest_severity": highest_risk_decision.severity if highest_risk_decision else None,
         }
@@ -961,6 +1008,8 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
             "round_value_summary": round_value_summary,
             "learning_tool_score": learning_tool_score,
             "matched_cves": prioritized_cves,
+            "vulnerability_queue": vulnerability_queue,
+            "vulnerability_coverage": vulnerability_coverage,
             "cve_candidate_summary": cve_candidate_summary,
             "cve_validation_trace": cve_validation_trace,
             "quantitative_metrics": quantitative_metrics,

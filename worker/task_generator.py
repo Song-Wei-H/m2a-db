@@ -15,8 +15,9 @@ from typing import Any
 from sqlalchemy import select
 
 from app.database import async_session
-from app.execution_governance import ACTION_BY_TOOL, canonical_parameters, propose_and_authorize
-from app.models import OpenPort, Target, ToolRegistry, ToolTask
+from app.execution_governance import ACTION_BY_TOOL, canonical_parameters, evaluate_and_authorize as propose_and_authorize
+from app.execution_trace import context_evidence, evidence_ref
+from app.models import OpenPort, Target, ToolRegistry, ToolTask, VulnerabilityCandidate
 from app.tool_task_constants import ACTIVE_TASK_STATUSES, NOT_REQUIRED, PENDING, PENDING_APPROVAL
 from app.tool_task_writer import create_tool_task_if_not_exists
 from worker.tool_name_normalizer import TOOL_ALIASES
@@ -207,6 +208,21 @@ async def generate_tool_task(
                 service=port_row.service if port_row else None,
                 action_id=ACTION_BY_TOOL[recommended_tool],
             )
+            candidate_rows = []
+            evidence_refs = context_evidence(target_row, port_row)
+            if recommended_tool == "nuclei_safe":
+                candidate_rows = (await session.execute(select(VulnerabilityCandidate).where(
+                    VulnerabilityCandidate.target_id == target_id,
+                    VulnerabilityCandidate.open_port_id == open_port_id,
+                    VulnerabilityCandidate.required_action == ACTION_BY_TOOL[recommended_tool],
+                    VulnerabilityCandidate.status.notin_(["VERIFIED", "NOT_VERIFIED", "NOT_TESTED", "COVERAGE_UNKNOWN", "NOT_APPLICABLE", "DENIED_BY_POLICY", "DENIED_BY_DEPTH", "EVIDENCE_INSUFFICIENT", "UNSUPPORTED_ACTION", "FAILED"]),
+                ))).scalars().all()
+                for candidate in candidate_rows:
+                    evidence_refs.append(evidence_ref(f"vulnerability_candidates:{candidate.id}", {
+                        "candidate_id": candidate.id, "candidate_key": candidate.candidate_key,
+                        "cve": candidate.cve, "open_port_id": candidate.open_port_id,
+                        "service": candidate.service, "evidence_refs": candidate.evidence_refs or [],
+                    }, "vulnerability_candidate"))
             governed = await propose_and_authorize(
                 session,
                 target=target_row,
@@ -217,13 +233,29 @@ async def generate_tool_task(
                 provider=str(decision_result.get("provider") or "decision-engine"),
                 authorization_source="gade-tier-policy",
                 investigation_id=decision_result.get("investigation_id"),
+                raw_proposal={"selected_action": ACTION_BY_TOOL[recommended_tool],
+                              "decision_output": decision_result},
+                evidence_refs=evidence_refs,
+                decision_score_id=decision_score_id,
             )
             if governed.authorization is None:
+                reason_code = ((governed.evaluation.contract_snapshot or {}).get("reason_code")
+                               if governed.evaluation else None)
+                candidate_status = (
+                    "DENIED_BY_DEPTH" if reason_code == "ATTACK_DEPTH_EXCEEDED"
+                    else "PENDING_EVIDENCE" if reason_code in {"EVIDENCE_REQUIRED", "SERVICE_EVIDENCE_REQUIRED"}
+                    else "DENIED_BY_POLICY"
+                )
+                for candidate in candidate_rows:
+                    candidate.authorization_decision_id = governed.evaluation.id if governed.evaluation else None
+                    candidate.status = candidate_status
+                    candidate.terminal_reason = reason_code if candidate_status in {"DENIED_BY_DEPTH", "DENIED_BY_POLICY"} else None
+                    candidate.validation_result = {"status": candidate_status, "reason_code": reason_code}
                 return {
                     "action": "decision_proposal_created",
                     "tool_task_id": None,
                     "proposal_id": governed.proposal.id,
-                    "status": "pending_human_approval",
+                    "status": governed.proposal.status,
                 }
             approval_required = False
             approval_status = NOT_REQUIRED
@@ -251,6 +283,13 @@ async def generate_tool_task(
                 "tool_name": recommended_tool,
                 "existing_task_id": task_id,
             }
+        if recommended_tool == "nuclei_safe":
+            evaluation_id = governed.evaluation.id if governed and governed.evaluation else None
+            for candidate in candidate_rows:
+                candidate.tool_task_id = task_id
+                candidate.execution_authorization_id = governed.authorization.id if governed else None
+                candidate.authorization_decision_id = evaluation_id
+                candidate.status = "AUTHORIZED" if governed and governed.authorization else "QUEUED"
 
     return {
         "action": "tool_task_created",

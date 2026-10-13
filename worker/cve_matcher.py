@@ -6,7 +6,9 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import CveEnrichment, PortCveMatch, TargetCveMatch
+from app.models import CveEnrichment, OpenPort, PortCveMatch, TargetCveMatch
+from app.action_contracts import ACTION_REQUIRED_ATTACK_DEPTH
+from app.vulnerability_queue import ensure_candidate
 from app.config import settings
 from worker.cve_local_index import LocalCveCandidate, query_local_candidates
 
@@ -258,6 +260,20 @@ async def match_cves_for_target(
                     session.add(PortCveMatch(**port_row_data))
                     inserted = True
                 output_data = port_row_data
+                port = await session.get(OpenPort, open_port_id) if isinstance(session, AsyncSession) else None
+                service = getattr(port, "service", None)
+                # Only the existing fixed safe HTTP scanner is a candidate-level
+                # CVE validation action. Other services remain explicit unsupported
+                # dispositions; discovery actions are not mislabeled as CVE tests.
+                is_http = (service or "").lower() in {"http", "https", "ssl/http", "http-alt", "www"} or getattr(port, "port", None) in {80, 443, 8000, 8080, 8443}
+                required_action = "nuclei.safe_scan.v1" if is_http else None
+                evidence_refs = [f"port_cve_matches:{target_id}:{open_port_id}:{cve_id}", f"open_ports:{open_port_id}"]
+                priority = (1000 if candidate.kev else 0) + (float(cvss_score or 0) * 10) + (float(candidate.epss or 0) * 100) + (confidence * 100)
+                if isinstance(session, AsyncSession):
+                    await ensure_candidate(session, target_id=target_id, cve=cve_id, open_port_id=open_port_id,
+                        service=service, evidence_refs=evidence_refs, priority=priority,
+                        required_action=required_action,
+                        required_depth=ACTION_REQUIRED_ATTACK_DEPTH.get(required_action) if required_action else None)
             else:
                 if not await _target_match_exists(
                     session,
@@ -268,6 +284,11 @@ async def match_cves_for_target(
                     session.add(TargetCveMatch(**row_data))
                     inserted = True
                 output_data = row_data
+                evidence_refs = [f"target_cve_matches:{target_id}:{cve_id}"]
+                if isinstance(session, AsyncSession):
+                    await ensure_candidate(session, target_id=target_id, cve=cve_id, open_port_id=None,
+                        service=None, evidence_refs=evidence_refs, priority=(1000 if candidate.kev else 0) + float(cvss_score or 0) * 10,
+                        required_action=None, required_depth=None)
 
             matches.append(
                 {

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, Integer, SmallInteger, String, Text, func
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
@@ -19,6 +19,11 @@ class Target(Base):
     target: Mapped[str] = mapped_column(String(255), nullable=False)
     target_type: Mapped[str | None] = mapped_column(String(50))
     scope: Mapped[str | None] = mapped_column(String(50))
+    authorization_depth: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="1")
+    authorization_policy_version: Mapped[str] = mapped_column(String(50), nullable=False, server_default="legacy-safe-default")
+    authorization_effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, server_default=func.now())
+    authorization_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False))
+    authorization_configured_by: Mapped[str] = mapped_column(String(100), nullable=False, server_default="legacy-record")
     status: Mapped[str] = mapped_column(String(50), server_default="pending")
     current_round: Mapped[int] = mapped_column(Integer, default=1)
     max_round: Mapped[int] = mapped_column(Integer, default=5)
@@ -163,7 +168,9 @@ class ToolResult(Base):
     target_id: Mapped[int | None] = mapped_column(Integer)
     scan_run_id: Mapped[int | None] = mapped_column(Integer)
     open_port_id: Mapped[int | None] = mapped_column(Integer)
-    tool_task_id: Mapped[int | None] = mapped_column(Integer)
+    tool_task_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("tool_tasks.id"))
+    execution_receipt: Mapped[dict | None] = mapped_column(JSONB)
+    output_hash: Mapped[str | None] = mapped_column(String(64))
     investigation_id: Mapped[str | None] = mapped_column(String(100))
     action_id: Mapped[str | None] = mapped_column(String(150))
     tool_name: Mapped[str | None] = mapped_column(String(100))
@@ -203,6 +210,9 @@ class ToolTask(Base):
     status: Mapped[str] = mapped_column(String(50), nullable=False, server_default="pending")
     priority: Mapped[int] = mapped_column(Integer, default=5)
     reject_reason: Mapped[str | None] = mapped_column(Text)
+    execution_request: Mapped[dict | None] = mapped_column(JSONB)
+    execution_request_hash: Mapped[str | None] = mapped_column(String(64))
+    execution_audit: Mapped[dict | None] = mapped_column(JSONB)
 
     approval_status: Mapped[str] = mapped_column(
         String(50), nullable=False, server_default="not_required"
@@ -353,6 +363,31 @@ class PortCveMatch(Base):
     )
 
 
+class VulnerabilityCandidate(Base):
+    """Assessment-scoped CVE/service/evidence lifecycle; never dedupe by CVE alone."""
+    __tablename__ = "vulnerability_candidates"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_id: Mapped[int] = mapped_column(Integer, ForeignKey("targets.id", ondelete="CASCADE"), nullable=False)
+    cve: Mapped[str] = mapped_column(String(50), nullable=False)
+    candidate_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    open_port_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("open_ports.id", ondelete="CASCADE"))
+    service: Mapped[str | None] = mapped_column(String(100))
+    evidence_refs: Mapped[list] = mapped_column(JSONB, nullable=False, server_default="[]")
+    required_action: Mapped[str | None] = mapped_column(String(150))
+    required_attack_depth: Mapped[int | None] = mapped_column(SmallInteger)
+    priority: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
+    status: Mapped[str] = mapped_column(String(40), nullable=False, server_default="DISCOVERED")
+    validation_coverage: Mapped[str] = mapped_column(String(24), nullable=False, server_default="NOT_EVALUATED")
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    authorization_decision_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("authorization_decisions.id"))
+    execution_authorization_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("execution_authorizations.id"))
+    tool_task_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("tool_tasks.id"))
+    validation_result: Mapped[dict | None] = mapped_column(JSONB)
+    terminal_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), server_default=func.now(), onupdate=func.now())
+
+
 class ValidationAction(Base):
     __tablename__ = "validation_actions"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -374,6 +409,10 @@ class DecisionProposal(Base):
     target_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     action_id: Mapped[str] = mapped_column(String(150), nullable=False)
     canonical_parameters: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    decision_score_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("decision_scores.id"))
+    raw_proposal: Mapped[dict | None] = mapped_column(JSONB)
+    evidence_refs: Mapped[list | None] = mapped_column(JSONB)
+    input_hash: Mapped[str | None] = mapped_column(String(64))
     confidence: Mapped[float | None] = mapped_column(Float)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     provider: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -400,6 +439,20 @@ class ExecutionAuthorization(Base):
     authorization_source: Mapped[str] = mapped_column(String(100), nullable=False)
     human_approved_by: Mapped[str | None] = mapped_column(String(255))
     human_approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), server_default=func.now())
+
+
+class AuthorizationDecision(Base):
+    """An evaluation is not an executable grant. DENY/PENDING have no grant."""
+    __tablename__ = "authorization_decisions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    proposal_id: Mapped[int] = mapped_column(Integer, ForeignKey("decision_proposals.id"), nullable=False)
+    authorization_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("execution_authorizations.id"), unique=True)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_source: Mapped[str] = mapped_column(String(100), nullable=False)
+    contract_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    record_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), server_default=func.now())
 
 

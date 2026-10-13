@@ -47,6 +47,12 @@ Target
 `tool_tasks` is the current execution queue and source of truth for worker
 execution.
 
+`Target` is one assessment record, not a shared asset inventory row. Each
+`POST /targets` creates a new Target and its initial ScanRun; repeated rounds
+and explicit retests remain within that same assessment and authorization
+profile. A new assessment for the same asset must create a new Target row.
+Authorization depth on Target is therefore assessment-scoped by this invariant.
+
 `scan_runs` is retained as an initial scan trace and backward-compatible
 container. `POST /targets` creates both a `scan_runs` row and an initial
 `nmap_service` `ToolTask`, but workers execute from `tool_tasks`, not directly

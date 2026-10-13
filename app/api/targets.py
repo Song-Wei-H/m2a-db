@@ -1,5 +1,6 @@
 import hashlib
 from pathlib import Path
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, status, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
@@ -7,13 +8,17 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import DecisionScore, LearningFeedback, PortCveMatch, ScanRun, Target, ToolResult, ToolTask
+from app.attack_authorization import POLICY_VERSION, level_definitions
+from app.models import (AuthorizationDecision, DecisionProposal, DecisionScore, LearningFeedback,
+                        PortCveMatch, ScanRun, Target, ToolResult, ToolTask)
 from app.schemas import (
     DashboardOverviewResponse,
     DecisionResponse,
     LearningFeedbackResponse,
     TargetCreate,
     TargetCreateResponse,
+    TargetAuthorizationProfile,
+    AttackAuthorizationDepthUpdate,
     TargetReportResponse,
     TargetRunStatusResponse,
     TargetSummaryResponse,
@@ -25,6 +30,95 @@ from worker.report_exporter import ReportExporter
 from worker.report_generator import generate_target_report
 
 router = APIRouter(tags=["targets"])
+
+
+@router.get("/authorization/attack-levels")
+async def get_attack_authorization_levels():
+    """Return M2A authorization depth definitions and registered action coverage."""
+    return {
+        "policy_version": POLICY_VERSION,
+        "model_note": "M2A cumulative authorization depth; not official linear MITRE ATT&CK phases.",
+        "levels": level_definitions(),
+    }
+
+
+def _authorization_profile(target: Target) -> TargetAuthorizationProfile:
+    return TargetAuthorizationProfile(
+        target_id=target.id,
+        authorization_depth=target.authorization_depth,
+        policy_version=target.authorization_policy_version,
+        scope=target.scope,
+        effective_from=target.authorization_effective_from,
+        expires_at=target.authorization_expires_at,
+        configured_by=target.authorization_configured_by,
+    )
+
+
+@router.get("/targets/{target_id}/authorization", response_model=TargetAuthorizationProfile)
+async def get_target_authorization(target_id: int, db: AsyncSession = Depends(get_db)):
+    target = await db.get(Target, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Target not found")
+    return _authorization_profile(target)
+
+
+@router.put("/targets/{target_id}/authorization", response_model=TargetAuthorizationProfile)
+async def update_target_authorization(
+    target_id: int,
+    body: AttackAuthorizationDepthUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    target = await db.get(Target, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Target not found")
+    if body.expires_at is not None:
+        expires_at = body.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if expires_at <= datetime.now(UTC):
+            raise HTTPException(status_code=422, detail="Authorization expiry must be in the future")
+    target.authorization_depth = body.authorization_depth
+    target.authorization_policy_version = POLICY_VERSION
+    target.authorization_effective_from = datetime.now(UTC).replace(tzinfo=None)
+    target.authorization_configured_by = "operator-ui"
+    if body.expires_at is not None:
+        target.authorization_expires_at = expires_at.astimezone(UTC).replace(tzinfo=None)
+    await db.commit()
+    return _authorization_profile(target)
+
+
+@router.get("/targets/{target_id}/authorization-decisions")
+async def get_target_authorization_decisions(target_id: int, db: AsyncSession = Depends(get_db)):
+    target = await db.get(Target, target_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Target not found")
+    statement = (
+        select(DecisionProposal, AuthorizationDecision)
+        .outerjoin(AuthorizationDecision, AuthorizationDecision.proposal_id == DecisionProposal.id)
+        .where(DecisionProposal.target_id == target_id)
+        .order_by(DecisionProposal.created_at.desc())
+        .limit(100)
+    )
+    rows = (await db.execute(statement)).all()
+    return [
+        {
+            "proposal_id": proposal.id,
+            "decision_score_id": proposal.decision_score_id,
+            "action_id": proposal.action_id,
+            "target_id": proposal.target_id,
+            "outcome": evaluation.outcome if evaluation else "UNAVAILABLE",
+            "reason": evaluation.reason if evaluation else proposal.status,
+            "reason_code": (evaluation.contract_snapshot or {}).get("reason_code") if evaluation else None,
+            "engagement_depth": (evaluation.contract_snapshot or {}).get("authorized_depth", target.authorization_depth) if evaluation else target.authorization_depth,
+            "required_depth": (evaluation.contract_snapshot or {}).get("required_depth") if evaluation else None,
+            "depth_check": (evaluation.contract_snapshot or {}).get("depth_check", "UNAVAILABLE") if evaluation else "UNAVAILABLE",
+            "evidence_check": (evaluation.contract_snapshot or {}).get("evidence_check", "UNAVAILABLE") if evaluation else "UNAVAILABLE",
+            "scope_check": (evaluation.contract_snapshot or {}).get("scope_check", "UNAVAILABLE") if evaluation else "UNAVAILABLE",
+            "approval_check": (evaluation.contract_snapshot or {}).get("approval_check", "UNAVAILABLE") if evaluation else "UNAVAILABLE",
+            "created_at": proposal.created_at.isoformat() if proposal.created_at else None,
+        }
+        for proposal, evaluation in rows
+    ]
 
 
 async def _get_report_or_404(target_id: int):
@@ -259,6 +353,10 @@ async def create_target(
         target=body.target,
         target_type=body.target_type,
         scope=body.scope,
+        authorization_depth=body.authorization_depth,
+        authorization_policy_version=POLICY_VERSION,
+        authorization_effective_from=datetime.now(UTC).replace(tzinfo=None),
+        authorization_configured_by="operator-ui",
         status=PENDING,
     )
     scan_run = ScanRun(
@@ -291,4 +389,5 @@ async def create_target(
     return TargetCreateResponse(        target_id=target.id,
         scan_run_id=scan_run.id,
         status=scan_run.status,
+        authorization_depth=body.authorization_depth,
     )

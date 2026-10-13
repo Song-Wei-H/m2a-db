@@ -6,22 +6,14 @@ from app.config import settings
 from app.tool_task_constants import COMPLETED, FAILED
 from worker.parsers.tool_result_parser import parse_tool_output
 from worker.tool_runner import TaskContext, ToolRunOutcome
+from app.execution_trace import execution_request
+from app.execution_governance import parameter_hash
 
 
 async def run_remote_tool(ctx: TaskContext) -> ToolRunOutcome:
     url = settings.kali_worker_url.rstrip("/") + "/execute"
 
-    payload = {
-        "tool": ctx.tool_name,
-        "target": ctx.host,
-        "port": ctx.port,
-        "protocol": ctx.protocol,
-        "service": ctx.service,
-        "action_id": ctx.action_id,
-        "execution_identity": ctx.execution_identity,
-        "authorization_parameters": ctx.authorization_parameters,
-        "authorization_parameters_hash": ctx.authorization_parameters_hash,
-    }
+    payload = execution_request(ctx)
 
     async with httpx.AsyncClient(
         timeout=settings.worker_tool_timeout_seconds,
@@ -43,6 +35,21 @@ async def run_remote_tool(ctx: TaskContext) -> ToolRunOutcome:
         "done",
         "accepted",
     )
+    receipt = data.get("execution_receipt")
+    trace_error = None
+    if ctx.authorization_id is not None:
+        if not isinstance(receipt, dict):
+            trace_error = "Worker execution receipt missing"
+        elif (receipt.get("request_hash") != parameter_hash(payload)
+              or receipt.get("task_id") != ctx.task_id
+              or receipt.get("authorization_id") != ctx.authorization_id
+              or receipt.get("executed_parameters") != ctx.authorization_parameters
+              or receipt.get("executed_action") != ctx.action_id
+              or receipt.get("execution_identity") != ctx.execution_identity
+              or receipt.get("handler_invoked") is not True):
+            trace_error = "Worker authority-to-execution drift"
+        if trace_error:
+            success = False
 
     raw_output = data.get("raw_output") or data.get("output") or ""
 
@@ -77,5 +84,6 @@ async def run_remote_tool(ctx: TaskContext) -> ToolRunOutcome:
         parsed_result=parsed_result,
         success=success,
         status=COMPLETED if success else FAILED,
-        error_message=data.get("error") or data.get("message"),
+        error_message=trace_error or data.get("error") or data.get("message"),
+        execution_receipt=data.get("execution_receipt"),
     )
