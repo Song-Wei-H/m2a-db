@@ -16,6 +16,9 @@ param(
 
     [string]$DatabaseUser,
 
+    [ValidatePattern('^[0-9a-f]{12}$')]
+    [string]$HostOrchestratorRunId,
+
     [switch]$Apply,
 
     [switch]$PreflightOnly
@@ -69,6 +72,14 @@ if ($customTargetProvided -eq 4) {
     $Target = [pscustomobject]@{
         Name = $ContainerName; HostIp = '127.0.0.1'; HostPort = [string]$HostPort
         Database = $DatabaseName; User = $DatabaseUser; First = 1; Last = 37
+    }
+}
+if (-not [string]::IsNullOrWhiteSpace($HostOrchestratorRunId)) {
+    if (-not $Apply -or $PreflightOnly -or $customTargetProvided -ne 4 -or $Mode -cne 'Migrations') {
+        throw 'HostOrchestratorRunId is valid only for Apply on a run-scoped fresh Migrations target.'
+    }
+    if ($ContainerName -cne "gade-preexp-$HostOrchestratorRunId-fresh") {
+        throw 'HostOrchestratorRunId does not match the exact fresh container identity.'
     }
 }
 if ($Target.Database -ceq 'm2a_pentest' -or $Target.HostPort -ceq '15432') {
@@ -588,8 +599,12 @@ try {
             'LegacyColumn' { 'APPLY-LEGACY025-001-037' }
             default { 'APPLY-001-037' }
         }
-        $confirmation = Read-Host "To execute against this empty scratch DB, type exactly $requiredConfirmation"
-        if ($confirmation -cne $requiredConfirmation) { Write-Host 'CANCELLED; no migration SQL was executed.'; return }
+        if ([string]::IsNullOrWhiteSpace($HostOrchestratorRunId)) {
+            $confirmation = Read-Host "To execute against this empty scratch DB, type exactly $requiredConfirmation"
+            if ($confirmation -cne $requiredConfirmation) { Write-Host 'CANCELLED; no migration SQL was executed.'; return }
+        } else {
+            Write-RunLog "HOST_ORCHESTRATOR_CONFIRMATION_ACCEPTED run_id=$HostOrchestratorRunId exact_container=$ContainerName"
+        }
     } else {
         Write-Host 'APPLY=AUTHORIZED_BY_HOST_ORCHESTRATOR_CONFIRMATION'
     }

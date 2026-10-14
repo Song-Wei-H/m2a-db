@@ -4,21 +4,28 @@ import hashlib
 import http.client
 import ipaddress
 import json
+import logging
 import shlex
 import socket
 import ssl
 import subprocess
 from contextvars import ContextVar
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict
 from app.action_contracts import (
-    ACTION_IDENTITIES, ACTION_BY_TOOL, canonical_action_parameters, PROTECTED_ACTION_TOOLS,
+    ACTION_IDENTITIES, ACTION_BY_TOOL, ACTION_TEMPLATES, canonical_action_parameters, PROTECTED_ACTION_TOOLS,
 )
 
 app = FastAPI(title="M2A Kali Worker", version="evidence-tools-v1")
 _authorized_argv: ContextVar[list[str] | None] = ContextVar("authorized_argv", default=None)
+_execution_context: ContextVar[dict[str, Any] | None] = ContextVar("execution_context", default=None)
+logger = logging.getLogger("kali_worker.execution")
+WORKER_BUILD_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 ALLOWED_TOOLS = {
     "nmap_service", "httpx_basic", "nuclei_safe", "dirb_safe",
@@ -47,6 +54,24 @@ class ExecuteRequest(BaseModel):
     authorization_parameters_hash: str | None = None
     task_id: int | None = None
     authorization_id: int | None = None
+    request_id: str | None = None
+    correlation_id: str | None = None
+    template_id: str | None = None
+    expected_worker_build_sha256: str | None = None
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _log_execution_event(event: str, **details: Any) -> None:
+    context = _execution_context.get() or {}
+    logger.info(json.dumps({"event": event, "timestamp_utc": _utc_now(),
+                            **context, **details}, sort_keys=True, default=str))
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()
 
 
 def canonical_parameters(req: ExecuteRequest) -> dict[str, Any]:
@@ -101,33 +126,86 @@ def resolve_target(target: str) -> list[str]:
 def run_command(command: list[str]) -> dict[str, Any]:
     expected = _authorized_argv.get()
     if expected is not None and command != expected:
+        _log_execution_event("process_rejected", reason="actual argv differs from authorization")
         return {"status": "rejected", "error": "actual argv differs from authorization",
                 "execution_argv": list(command), "raw_output": "", "subprocess_started": False}
+    process_started_at = None
+    process_completed_at = None
+    process = None
     try:
-        result = subprocess.run(
-            command, capture_output=True, text=True, timeout=180,
+        process = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             shell=False,
         )
+        process_started_at = _utc_now()
+        _log_execution_event("process_started", pid=process.pid,
+                             argv_sha256=_sha256_text(json.dumps(command, separators=(",", ":"))),
+                             process_started_at_utc=process_started_at)
+        stdout, stderr = process.communicate(timeout=180)
+        process_completed_at = _utc_now()
+        combined = stdout + stderr
+        _log_execution_event("process_completed", pid=process.pid, exit_code=process.returncode,
+                             process_completed_at_utc=process_completed_at,
+                             stdout_sha256=_sha256_text(stdout),
+                             stderr_sha256=_sha256_text(stderr),
+                             output_sha256=_sha256_text(combined))
         return {
-            "status": "completed" if result.returncode == 0 else "failed",
+            "status": "completed" if process.returncode == 0 else "failed",
             "command": " ".join(shlex.quote(value) for value in command),
-            "returncode": result.returncode,
-            "raw_output": result.stdout + result.stderr,
-            "execution_argv": list(command), "subprocess_started": True,
+            "returncode": process.returncode,
+            "raw_output": combined,
+            "execution_argv": list(command), "subprocess_started": True, "process_pid": process.pid,
+            "process_started_at_utc": process_started_at,
+            "process_completed_at_utc": process_completed_at,
+            "stdout_sha256": _sha256_text(stdout),
+            "stderr_sha256": _sha256_text(stderr),
+            "output_sha256": _sha256_text(combined),
         }
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
+        if process is not None:
+            process.kill()
+            stdout, stderr = process.communicate()
+        else:
+            stdout, stderr = "", ""
+        process_completed_at = _utc_now()
+        _log_execution_event("process_timed_out", pid=process.pid if process else None,
+                             process_started_at_utc=process_started_at,
+                             process_completed_at_utc=process_completed_at,
+                             stdout_sha256=_sha256_text(stdout), stderr_sha256=_sha256_text(stderr))
         return {
             "status": "failed",
             "command": " ".join(shlex.quote(value) for value in command),
             "error": "command timeout", "raw_output": "",
-            "execution_argv": list(command), "subprocess_started": True,
+            "execution_argv": list(command), "subprocess_started": process is not None,
+            "process_pid": process.pid if process else None,
+            "process_started_at_utc": process_started_at,
+            "process_completed_at_utc": process_completed_at,
+            "stdout_sha256": _sha256_text(stdout),
+            "stderr_sha256": _sha256_text(stderr),
+            "output_sha256": _sha256_text(stdout + stderr),
         }
     except Exception as exc:
+        if process is not None and process.poll() is None:
+            process.kill()
+            stdout, stderr = process.communicate()
+        else:
+            stdout, stderr = "", ""
+        process_completed_at = _utc_now() if process is not None else None
+        _log_execution_event("process_error", pid=process.pid if process else None,
+                             error_type=type(exc).__name__,
+                             process_started_at_utc=process_started_at,
+                             process_completed_at_utc=process_completed_at)
         return {
             "status": "failed",
             "command": " ".join(shlex.quote(value) for value in command),
             "error": f"{type(exc).__name__}: {exc}", "raw_output": "",
-            "execution_argv": list(command), "subprocess_started": None,
+            "execution_argv": list(command), "subprocess_started": process is not None,
+            "process_pid": process.pid if process else None,
+            "process_started_at_utc": process_started_at,
+            "process_completed_at_utc": process_completed_at,
+            "stdout_sha256": _sha256_text(stdout),
+            "stderr_sha256": _sha256_text(stderr),
+            "output_sha256": _sha256_text(stdout + stderr),
         }
 
 
@@ -285,6 +363,7 @@ def run_dns_metadata(target: str, scoped_addresses: list[str]) -> dict[str, Any]
 def health() -> dict[str, Any]:
     return {
         "status": "ok", "version": app.version,
+        "build_sha256": WORKER_BUILD_SHA256,
         "allowed_tools": sorted(ALLOWED_TOOLS),
         "scope_policy": "external_network_controls",
         "scope_enforced_by_worker": False,
@@ -293,18 +372,46 @@ def health() -> dict[str, Any]:
 
 @app.post("/execute")
 def execute(req: ExecuteRequest) -> dict[str, Any]:
+    request_received_at = _utc_now()
+    request_context = {"request_id": req.request_id, "tool_task_id": req.task_id,
+                       "correlation_id": req.correlation_id,
+                       "authorization_id": req.authorization_id, "action_id": req.action_id,
+                       "template_id": req.template_id,
+                       "expected_worker_build_sha256": req.expected_worker_build_sha256,
+                       "target": req.target, "port": req.port}
+    _log_execution_event("request_received", **request_context)
+
+    def reject(reason: str) -> dict[str, Any]:
+        _log_execution_event("request_rejected", reason=reason)
+        return {"status": "rejected", "reason": reason, "tool": req.tool}
+
     if req.tool not in ALLOWED_TOOLS:
-        return {"status": "rejected", "reason": "tool not allowed", "tool": req.tool}
+        return reject("tool not allowed")
     try:
         identity_error = validate_execution_identity(req)
     except (ValueError, TypeError) as exc:
         identity_error = str(exc)
     if identity_error:
-        return {"status": "rejected", "reason": identity_error, "tool": req.tool}
+        return reject(identity_error)
+    if req.authorization_id is not None:
+        if (req.action_id is None or req.task_id is None or not req.request_id
+                or not req.template_id or not req.expected_worker_build_sha256):
+            return reject("governed request correlation fields missing")
+        try:
+            UUID(req.request_id)
+        except (ValueError, TypeError, AttributeError):
+            return reject("request_id must be a UUID")
+        if req.template_id != ACTION_TEMPLATES.get(req.action_id):
+            return reject("template_id does not match action contract")
+        if req.expected_worker_build_sha256 != WORKER_BUILD_SHA256:
+            return reject("Worker build hash does not match requested repository build")
+    elif req.action_id is not None and req.template_id is not None:
+        if req.template_id != ACTION_TEMPLATES.get(req.action_id):
+            return reject("template_id does not match action contract")
     try:
         addresses = resolve_target(req.target)
     except (OSError, ValueError) as exc:
-        return {"status": "rejected", "reason": str(exc), "tool": req.tool}
+        return reject(str(exc))
     authorized_url = (req.authorization_parameters or {}).get("canonical_url")
     authorized_sni = (req.authorization_parameters or {}).get("sni")
     handlers = {
@@ -319,19 +426,47 @@ def execute(req: ExecuteRequest) -> dict[str, Any]:
         "dns_metadata": lambda: run_dns_metadata(req.target, addresses),
     }
     token = _authorized_argv.set((req.authorization_parameters or {}).get("argv"))
+    request_token = _execution_context.set(request_context)
+    handler_started_at = _utc_now()
+    _log_execution_event("handler_started", request_received_at_utc=request_received_at,
+                         handler_started_at_utc=handler_started_at)
     try:
         result = handlers[req.tool]()
+    except Exception as exc:
+        _log_execution_event("handler_exception", error_type=type(exc).__name__)
+        raise
     finally:
         _authorized_argv.reset(token)
+        _execution_context.reset(request_token)
     observed = canonical_parameters(req)
     if "execution_argv" in result:
         observed["argv"] = result["execution_argv"]
     result["execution_receipt"] = {
+        "request_id": req.request_id,
+        "correlation_id": req.correlation_id,
         "task_id": req.task_id, "authorization_id": req.authorization_id,
+        "template_id": req.template_id,
         "request_hash": parameters_hash(req.model_dump()),
         "executed_action": req.action_id, "executed_parameters": observed,
         "execution_identity": req.execution_identity, "handler_invoked": True,
         "subprocess_started": result.get("subprocess_started"),
+        "request_received_at_utc": request_received_at,
+        "handler_started_at_utc": handler_started_at,
+        "handler_completed_at_utc": _utc_now(),
+        "worker_build_sha256": WORKER_BUILD_SHA256,
+        "process_started_at_utc": result.get("process_started_at_utc"),
+        "process_completed_at_utc": result.get("process_completed_at_utc"),
+        "process_pid": result.get("process_pid"),
+        "process_exit_code": result.get("returncode"),
+        "process_output_sha256": result.get("output_sha256", _sha256_text(result.get("raw_output", ""))),
+        "execution_outcome": result.get("status", "unknown"),
+        "action_success": (result.get("status") in ("completed", "success", "done")
+                           and (result.get("parsed_result") or {}).get("success") is not False),
+        "execution_kind": "subprocess" if "subprocess_started" in result else "builtin_handler",
         "observation": "handler invocation / actual argv; no destination attestation",
     }
+    _log_execution_event("handler_completed", **request_context,
+                         execution_outcome=result["execution_receipt"]["execution_outcome"],
+                         action_success=result["execution_receipt"]["action_success"],
+                         receipt_sha256=parameters_hash(result["execution_receipt"]))
     return result

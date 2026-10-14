@@ -36,6 +36,7 @@ from app.models import (
     ValidationAction,
 )
 from app.tool_task_writer import create_tool_task_if_not_exists
+from kali_worker.app import WORKER_BUILD_SHA256
 from worker.task_poller import _claim_task, _load_task_context, _persist_result, _record_learning_feedback
 from worker.tool_runner import ToolRunOutcome
 
@@ -174,6 +175,9 @@ async def test_postgresql_tool_result_feedback_transactions_and_governance(monke
                 authorization_parameters=params,
                 authorization_parameters_hash=governed.authorization.parameters_hash,
                 authorization_id=governed.authorization.id,
+                request_id=str(uuid4()),
+                template_id=ACTION_TEMPLATES[action],
+                expected_worker_build_sha256=WORKER_BUILD_SHA256,
             )
             request = execution_request(ctx)
             task.execution_request = request

@@ -4,8 +4,12 @@ from __future__ import annotations
 from worker.remote_runner import run_remote_tool
 
 import asyncio
+import hashlib
 import logging
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, replace
+from pathlib import Path
+from uuid import uuid4
 
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +35,14 @@ from worker.auto_loop import finalize_target_if_idle, increment_target_round
 from worker.cve_matcher import match_cves_for_target
 
 logger = logging.getLogger(__name__)
+
+
+def _with_dispatch_correlation(ctx: TaskContext, template_id: str) -> TaskContext:
+    worker_source = Path(__file__).resolve().parents[1] / "kali_worker" / "app.py"
+    build_hash = hashlib.sha256(worker_source.read_bytes()).hexdigest()
+    correlation_id = os.environ.get("GADE_L1_CORRELATION_ID") or str(uuid4())
+    return replace(ctx, request_id=str(uuid4()), correlation_id=correlation_id, template_id=template_id,
+                   expected_worker_build_sha256=build_hash)
 
 
 @dataclass(frozen=True)
@@ -219,6 +231,8 @@ async def _persist_result(db: AsyncSession, ctx: TaskContext, outcome) -> int:
             "learning_feedback_status": "pending",
             "learning_feedback_retryable": True,
         })
+        if getattr(outcome, "worker_exchange", None) is not None:
+            audit["worker_exchange"] = outcome.worker_exchange
         task.execution_audit = audit
 
     await db.execute(
@@ -346,6 +360,7 @@ async def _fail_task(
     reason: str,
     *,
     command: str | None = None,
+    worker_exchange: dict | None = None,
 ) -> None:
     result_id: int | None = None
     async with async_session() as db, db.begin():
@@ -381,6 +396,8 @@ async def _fail_task(
                 "learning_feedback_status": "pending",
                 "learning_feedback_retryable": True,
             })
+            if worker_exchange is not None:
+                audit["worker_exchange"] = worker_exchange
             task.execution_audit = audit
 
     if result_id is not None:
@@ -516,10 +533,17 @@ async def execute_task(task_id: int) -> None:
             )
             return
 
+        # Persist one correlation id with the exact request before dispatch.
+        # It is included in the request hash and echoed by the Worker receipt.
+        ctx = _with_dispatch_correlation(ctx, template_row.template_id)
+
         request = execution_request(ctx)
         task.execution_request = request
         task.execution_request_hash = parameter_hash(request)
-        task.execution_audit = {"stage": "prepared", "handler_invoked": None}
+        task.execution_audit = {"stage": "prepared", "handler_invoked": None,
+                                "request_id": ctx.request_id, "correlation_id": ctx.correlation_id,
+                                "template_id": ctx.template_id,
+                                "expected_worker_build_sha256": ctx.expected_worker_build_sha256}
 
     if ctx is None or template_row is None or task_snapshot is None:
         logger.error("tool_task_id=%s missing execution context", task_id)
@@ -534,8 +558,10 @@ async def execute_task(task_id: int) -> None:
         )
 
         logger.info(
-            "tool_task_id=%s executing tool=%s host=%s approval_status=%s",
+            "tool_task_id=%s request_id=%s template_id=%s executing tool=%s host=%s approval_status=%s",
             task_id,
+            ctx.request_id,
+            ctx.template_id,
             ctx.tool_name,
             ctx.host,
             task_snapshot.approval_status,
@@ -550,13 +576,20 @@ async def execute_task(task_id: int) -> None:
 
     except TimeoutError as exc:
         reason = str(exc) or "remote tool timeout"
-        logger.exception("tool_task_id=%s execution timeout: %s", task_id, reason)
-        await _fail_task(task_snapshot, reason, command=f"remote:{ctx.tool_name}")
+        logger.exception("tool_task_id=%s request_id=%s execution timeout: %s",
+                         task_id, ctx.request_id, reason)
+        await _fail_task(task_snapshot, reason, command=f"remote:{ctx.tool_name}",
+                         worker_exchange={"request_id": ctx.request_id, "task_id": task_id,
+                                          "delivery": "unknown", "transport_error": reason})
         return
 
     except Exception as exc:
-        logger.exception("tool_task_id=%s execution error: %s", task_id, exc)
-        await _fail_task(task_snapshot, "execution error")
+        reason = f"{type(exc).__name__}: {exc}"
+        logger.exception("tool_task_id=%s request_id=%s execution error: %s",
+                         task_id, ctx.request_id, reason)
+        await _fail_task(task_snapshot, reason, command=f"remote:{ctx.tool_name}",
+                         worker_exchange={"request_id": ctx.request_id, "task_id": task_id,
+                                          "delivery": "unknown", "transport_error": reason})
         return
 
     async with async_session() as db, db.begin():

@@ -1,9 +1,12 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID
+import hashlib
+from pathlib import Path
 
 import pytest
 
-from worker.task_poller import _persist_result, execute_task, fetch_pending_tasks
+from worker.task_poller import _persist_result, _with_dispatch_correlation, execute_task, fetch_pending_tasks
 from worker.tool_runner import TaskContext, ToolRunOutcome
 
 
@@ -33,6 +36,8 @@ async def test_persist_result_commits_core_result_and_marks_feedback_pending():
         success=True,
         status="completed",
         error_message=None,
+        worker_exchange={"request_id": "test-request", "http_status": 200,
+                         "application_status": "completed", "receipt_present": True},
     )
 
     result_id = await _persist_result(db, ctx, outcome)
@@ -45,7 +50,24 @@ async def test_persist_result_commits_core_result_and_marks_feedback_pending():
     assert tool_result.tool_name == "httpx_basic"
     assert task.execution_audit["result_persisted"] is True
     assert task.execution_audit["learning_feedback_status"] == "pending"
+    assert task.execution_audit["worker_exchange"]["request_id"] == "test-request"
     assert task.execution_audit["learning_feedback_retryable"] is True
+
+
+def test_dispatch_correlation_is_a_uuid_bound_to_selected_template():
+    ctx = TaskContext(
+        task_id=91, target_id=2, tool_name="http_security_headers",
+        host="192.0.2.5", port=18080, protocol="tcp", service="http",
+        open_port_id=3,
+    )
+    correlated = _with_dispatch_correlation(ctx, "http_security_headers_v2")
+    UUID(correlated.request_id)
+    assert correlated.template_id == "http_security_headers_v2"
+    assert len(correlated.expected_worker_build_sha256) == 64
+    assert correlated.expected_worker_build_sha256 == hashlib.sha256(
+        (Path(__file__).resolve().parents[1] / "kali_worker" / "app.py").read_bytes()
+    ).hexdigest()
+    assert correlated.task_id == ctx.task_id
 
 
 @pytest.mark.asyncio
@@ -134,7 +156,7 @@ async def test_execute_task_remote_timeout_marks_failed_and_writes_tool_result()
     target = SimpleNamespace(id=14, target="198.51.100.13")
     open_port = SimpleNamespace(id=17, port=443, protocol="tcp", service="ssl/http")
     registry = SimpleNamespace(enabled=True)
-    template = SimpleNamespace(enabled=True)
+    template = SimpleNamespace(enabled=True, template_id="dirb_safe_v1")
 
     initial_db = MagicMock()
     initial_db.begin.return_value = FakeAsyncSessionContext(initial_db)

@@ -24,7 +24,7 @@ from app.execution_trace import (context_evidence, execution_request, trace_tool
 from app.models import (Base, Target, OpenPort, DecisionScore, DecisionProposal,
                         AuthorizationDecision, ExecutionAuthorization, ToolResult, ToolTask, ValidationAction)
 from app.tool_task_writer import create_tool_task_if_not_exists
-from kali_worker.app import ExecuteRequest, execute
+from kali_worker.app import ExecuteRequest, WORKER_BUILD_SHA256, execute
 from worker.task_poller import _claim_task, _load_task_context, _persist_result
 from worker.tool_runner import ToolRunOutcome
 
@@ -60,16 +60,95 @@ def test_actual_argv_drift_never_calls_subprocess():
     params = canonical_parameters(target="trace.example", port=80, protocol="tcp", service="http", action_id=action)
     req = ExecuteRequest(tool="httpx_basic", target="trace.example", port=80, protocol="tcp", service="http",
         action_id=action, execution_identity=ACTION_IDENTITIES[action], authorization_parameters=params,
-        authorization_parameters_hash=parameter_hash(params), task_id=10, authorization_id=20)
+        authorization_parameters_hash=parameter_hash(params), task_id=10, authorization_id=20,
+        request_id=str(uuid4()), template_id=ACTION_TEMPLATES[action],
+        expected_worker_build_sha256=WORKER_BUILD_SHA256)
     from kali_worker.app import run_command
     with patch("kali_worker.app.resolve_target", return_value=["192.0.2.10"]), \
          patch("kali_worker.app.run_httpx", side_effect=lambda *args: run_command(["httpx", "-u", "http://other.example/"])), \
-         patch("kali_worker.app.subprocess.run") as process:
+         patch("kali_worker.app.subprocess.Popen") as process:
         result = execute(req)
     process.assert_not_called()
     assert result["status"] == "rejected"
     assert result["execution_receipt"]["executed_parameters"] != params
     assert result["execution_receipt"]["subprocess_started"] is False
+
+
+@pytest.mark.asyncio
+async def test_missing_worker_receipt_keeps_execution_trace_partial():
+    result = ToolResult(
+        id=7, target_id=9, tool_name="http_security_headers", success=False,
+        tool_task_id=None, execution_receipt=None, output_hash=None,
+    )
+
+    class ReadOnlyResultDB:
+        async def get(self, model, object_id):
+            return result if model is ToolResult else None
+
+    trace = await trace_tool_result(ReadOnlyResultDB(), result.id)
+    assert trace["status"] == "PARTIAL"
+    assert "worker_receipt_missing" in trace["issues"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_worker_without_native_receipt_has_explicit_partial_marker():
+    from types import SimpleNamespace
+    from app.models import DecisionProposal, ExecutionAuthorization, AuthorizationDecision
+
+    params = {"target": "10.56.66.119", "port": 18080}
+    request = {
+        "tool": "http_security_headers", "target": "10.56.66.119", "port": 18080,
+        "service": "http", "protocol": "tcp", "action_id": "http_security_headers.collect.v1",
+        "execution_identity": "fixed-test-identity", "authorization_parameters": params,
+        "authorization_parameters_hash": parameter_hash(params), "task_id": 31,
+        "authorization_id": 41, "request_id": "request-1", "correlation_id": "correlation-1",
+        "template_id": "http_security_headers_v2", "expected_worker_build_sha256": "a" * 64,
+    }
+    def as_model_row(model, **values):
+        defaults = {column.name: None for column in model.__table__.columns}
+        return SimpleNamespace(**{**defaults, "__table__": model.__table__, **values})
+
+    grant = as_model_row(ExecutionAuthorization,
+        id=41, proposal_id=51, target_id=9, investigation_id="inv-1",
+        action_id="http_security_headers.collect.v1", canonical_parameters=params,
+        parameters_hash=parameter_hash(params), execution_identity="fixed-test-identity",
+    )
+    task = as_model_row(ToolTask,
+        id=31, target_id=9, investigation_id="inv-1", action_id="http_security_headers.collect.v1",
+        execution_authorization_id=41, execution_request=request,
+        execution_request_hash=parameter_hash(request), execution_audit={"worker_exchange": {
+            "api_mode": "legacy", "native_receipt_status": "NATIVE_WORKER_RECEIPT_UNAVAILABLE",
+            "request_id": "request-1", "correlation_id": "correlation-1",
+            "task_id": 31, "authorization_id": 41,
+            "http_request": {"body": {"tool": "http_security_headers", "target": "10.56.66.119",
+                                        "port": 18080, "service": "http"}},
+        }},
+    )
+    proposal = as_model_row(DecisionProposal,
+        evidence_refs=[], raw_proposal={"source": "deterministic"}, input_hash="",
+        target_id=9, investigation_id="inv-1", action_id="http_security_headers.collect.v1",
+    )
+    result = ToolResult(
+        id=3, target_id=9, tool_name="http_security_headers", success=True,
+        tool_task_id=31, investigation_id="inv-1", action_id="http_security_headers.collect.v1",
+        execution_receipt=None,
+    )
+
+    class ReadOnlyDB:
+        async def get(self, model, object_id):
+            return {ToolResult: result, ToolTask: task, ExecutionAuthorization: grant,
+                    DecisionProposal: proposal}.get(model)
+
+        async def execute(self, _statement):
+            return SimpleNamespace(scalar_one_or_none=lambda: None)
+
+    trace = await trace_tool_result(ReadOnlyDB(), 3)
+    assert trace["status"] == "PARTIAL"
+    assert "native_worker_receipt_unavailable" in trace["issues"]
+    assert "worker_receipt_missing" not in trace["issues"]
+    assert "legacy_worker_correlation_mismatch" not in trace["issues"]
+    assert trace["native_worker_receipt_status"] == "NATIVE_WORKER_RECEIPT_UNAVAILABLE"
+    assert trace["status"] == "PARTIAL"
 
 
 @pytest.mark.asyncio
@@ -145,7 +224,9 @@ async def test_postgresql_trace_chain():
                     ctx = await _load_task_context(db, task)
                     ctx = replace(ctx, execution_identity=governed.authorization.execution_identity,
                         authorization_parameters=params, authorization_parameters_hash=parameter_hash(params),
-                        authorization_id=governed.authorization.id)
+                        authorization_id=governed.authorization.id, request_id=str(uuid4()),
+                        template_id=ACTION_TEMPLATES[action],
+                        expected_worker_build_sha256=WORKER_BUILD_SHA256)
                     request = execution_request(ctx)
                     task.execution_request = request
                     task.execution_request_hash = parameter_hash(request)

@@ -83,7 +83,11 @@ def execution_request(ctx) -> dict:
             "execution_identity": ctx.execution_identity,
             "authorization_parameters": deepcopy(ctx.authorization_parameters),
             "authorization_parameters_hash": ctx.authorization_parameters_hash,
-            "task_id": ctx.task_id, "authorization_id": getattr(ctx, "authorization_id", None)}
+            "task_id": ctx.task_id, "authorization_id": getattr(ctx, "authorization_id", None),
+            "request_id": getattr(ctx, "request_id", None),
+            "correlation_id": getattr(ctx, "correlation_id", None),
+            "template_id": getattr(ctx, "template_id", None),
+            "expected_worker_build_sha256": getattr(ctx, "expected_worker_build_sha256", None)}
 
 
 def row_dict(row) -> dict | None:
@@ -136,6 +140,10 @@ async def trace_tool_result(db, result_id: int) -> dict[str, Any]:
     if task:
         if not task.execution_request or task.execution_request_hash != parameter_hash(task.execution_request):
             issues.append("execution_request_unverified")
+        elif grant and (not task.execution_request.get("request_id")
+                        or not task.execution_request.get("template_id")
+                        or not task.execution_request.get("expected_worker_build_sha256")):
+            issues.append("execution_request_correlation_missing")
         elif grant and (task.execution_request.get("task_id") != task.id
                         or task.execution_request.get("authorization_id") != grant.id
                         or task.execution_request.get("action_id") != grant.action_id
@@ -149,15 +157,47 @@ async def trace_tool_result(db, result_id: int) -> dict[str, Any]:
         if result.target_id != task.target_id or result.action_id != task.action_id or result.investigation_id != task.investigation_id:
             issues.append("result_task_identity_mismatch")
     receipt = result.execution_receipt
+    exchange = (task.execution_audit or {}).get("worker_exchange") if task else None
+    legacy_exchange = isinstance(exchange, dict) and exchange.get("api_mode") == "legacy"
     if not receipt:
-        issues.append("worker_receipt_missing")
+        issues.append("native_worker_receipt_unavailable" if legacy_exchange else "worker_receipt_missing")
+        if legacy_exchange:
+            legacy_request = exchange.get("http_request")
+            legacy_body = legacy_request.get("body") if isinstance(legacy_request, dict) else None
+            grant_parameters = grant.canonical_parameters if grant else {}
+            if (exchange.get("native_receipt_status") != "NATIVE_WORKER_RECEIPT_UNAVAILABLE"
+                    or exchange.get("request_id") != (task.execution_request or {}).get("request_id")
+                    or exchange.get("correlation_id") != (task.execution_request or {}).get("correlation_id")
+                    or exchange.get("task_id") != task.id
+                    or exchange.get("authorization_id") != (grant.id if grant else None)
+                    or not isinstance(legacy_body, dict)
+                    or legacy_body.get("target") != grant_parameters.get("target")
+                    or legacy_body.get("port") != grant_parameters.get("port")):
+                issues.append("legacy_worker_correlation_mismatch")
     elif task and grant:
         if (receipt.get("request_hash") != task.execution_request_hash
+                or receipt.get("request_id") != task.execution_request.get("request_id")
+                or receipt.get("correlation_id") != task.execution_request.get("correlation_id")
+                or receipt.get("template_id") != task.execution_request.get("template_id")
                 or receipt.get("task_id") != task.id or receipt.get("authorization_id") != grant.id
                 or receipt.get("executed_action") != grant.action_id
                 or receipt.get("executed_parameters") != grant.canonical_parameters
                 or receipt.get("execution_identity") != grant.execution_identity
-                or receipt.get("handler_invoked") is not True):
+                or receipt.get("handler_invoked") is not True
+                or not receipt.get("request_received_at_utc")
+                or not receipt.get("handler_started_at_utc")
+                or not receipt.get("handler_completed_at_utc")
+                or not isinstance(receipt.get("worker_build_sha256"), str)
+                or len(receipt.get("worker_build_sha256", "")) != 64
+                or receipt.get("worker_build_sha256") != task.execution_request.get("expected_worker_build_sha256")
+                or not receipt.get("execution_outcome")
+                or receipt.get("execution_kind") not in ("subprocess", "builtin_handler")
+                or (receipt.get("execution_kind") == "subprocess"
+                    and receipt.get("subprocess_started") is True
+                    and (not receipt.get("process_started_at_utc")
+                         or not receipt.get("process_completed_at_utc")
+                         or receipt.get("process_exit_code") is None
+                         or not receipt.get("process_output_sha256")))):
             issues.append("authority_execution_mismatch")
     if not result.output_hash or result.output_hash != parameter_hash(result_output(result)):
         issues.append("result_integrity_unverified")
@@ -165,7 +205,11 @@ async def trace_tool_result(db, result_id: int) -> dict[str, Any]:
             "tool_result": row_dict(result), "tool_task": row_dict(task),
             "execution_authorization": row_dict(grant), "authorization_decision": row_dict(evaluation),
             "decision": row_dict(proposal), "evidence": refs,
+            "native_worker_receipt_status": ("NATIVE_WORKER_RECEIPT_UNAVAILABLE" if legacy_exchange
+                                              else ("PRESENT" if receipt else "MISSING")),
             "proposal_to_authority_drift": (
                 proposal.raw_proposal.get("proposed_parameters") != grant.canonical_parameters
                 if proposal and grant and proposal.raw_proposal and "proposed_parameters" in proposal.raw_proposal else None),
-            "receipt_scope": "Worker-reported handler invocation; not authenticated transport or destination attestation"}
+            "receipt_scope": ("Legacy response locally correlated; native handler/process attestation unavailable"
+                              if legacy_exchange else
+                              "Worker-reported handler invocation; not authenticated transport or destination attestation")}

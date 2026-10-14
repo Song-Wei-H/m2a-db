@@ -40,6 +40,10 @@ class TaskContext:
     authorization_parameters: dict | None = None
     authorization_parameters_hash: str | None = None
     authorization_id: int | None = None
+    request_id: str | None = None
+    correlation_id: str | None = None
+    template_id: str | None = None
+    expected_worker_build_sha256: str | None = None
 
 
 @dataclass
@@ -51,6 +55,7 @@ class ToolRunOutcome:
     status: str
     error_message: str | None = None
     execution_receipt: dict | None = None
+    worker_exchange: dict | None = None
 
 
 def build_command(ctx: TaskContext, template_row) -> tuple[list[str], str]:
