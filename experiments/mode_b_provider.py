@@ -69,7 +69,8 @@ def normalize_action_intent(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
         raise ValueError("Mode B action intent is missing numeric confidence")
     forbidden_authority_fields = {
-        "target", "host", "url", "port", "tier", "risk", "template",
+        "target", "host", "url", "port", "protocol", "service", "tier", "risk", "template",
+        "scope", "authorization_depth", "authorized_depth", "required_attack_depth",
         "template_version", "execution_identity", "parameters", "command", "args",
         "arguments", "proposed_parameters", "model_supplied_tier", "model_supplied_risk",
     }
@@ -109,6 +110,7 @@ def materialize_action_intent(
         "proposed_parameters": proposed_parameters,
         "model_supplied_tier": None,
         "model_supplied_risk": None,
+        "ignored_authority_fields": list(action_intent.get("ignored_authority_fields") or []),
         "reason": action_intent["reason"],
         "confidence": action_intent["confidence"],
         "raw_response": raw_response,
@@ -129,10 +131,22 @@ class ProviderCallEvidence:
     proposal: dict[str, Any]
 
 
+class ProviderResponseError(ValueError):
+    def __init__(self, message: str, evidence: dict[str, Any]):
+        super().__init__(message)
+        self.evidence = evidence
+
+
+class ProviderIdentityError(ProviderResponseError):
+    pass
+
+
 class LiteLlmModeBAdapter:
     provider = "company-litellm"
 
-    def call(self, scenario: dict[str, Any]) -> ProviderCallEvidence:
+    def call(self, scenario: dict[str, Any], *, expected_model: str | None = None) -> ProviderCallEvidence:
+        if expected_model is not None and settings.llm_model != expected_model:
+            raise ProviderIdentityError("Configured requested model differs from the frozen model", {})
         client_call_nonce = str(uuid.uuid4())
         user_payload = {
             "sample_ref": hashlib.sha256(
@@ -171,25 +185,39 @@ class LiteLlmModeBAdapter:
         )
         response.raise_for_status()
         body = response.json()
-        provider_call_id = body.get("id")
-        returned_model = body.get("model")
-        if not isinstance(provider_call_id, str) or not provider_call_id.strip():
-            raise ValueError("Mode B response is missing provider_call_id")
-        if not isinstance(returned_model, str) or not returned_model.strip():
-            raise ValueError("Mode B response is missing returned model identity")
-        try:
-            content = body["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise ValueError("Mode B response is missing message content") from exc
-        if not isinstance(content, str) or not content.strip():
-            raise ValueError("Mode B response message is empty")
-        proposal = normalize_action_intent(_extract_json(content))
         evidence_request = {
             "url": f"{settings.llm_base_url.rstrip('/')}/chat/completions",
             "body": request_body,
             "auth_sent": bool(settings.llm_send_auth and settings.llm_api_key),
             "cache_bypass": True,
         }
+        captured = {
+            "provider": self.provider, "requested_model": settings.llm_model,
+            "request": evidence_request, "response": body,
+            "prompt_hash": hashlib.sha256(MODE_B_SYSTEM_PROMPT.encode()).hexdigest(),
+            "request_hash": _sha256(evidence_request), "response_hash": _sha256(body),
+        }
+        if not isinstance(body, dict):
+            raise ProviderIdentityError("Mode B response has no identity object", captured)
+        provider_call_id = body.get("id")
+        returned_model = body.get("model")
+        captured.update({"provider_call_id": provider_call_id, "returned_model": returned_model})
+        if not isinstance(provider_call_id, str) or not provider_call_id.strip():
+            raise ProviderIdentityError("Mode B response is missing provider_call_id", captured)
+        if not isinstance(returned_model, str) or not returned_model.strip():
+            raise ProviderIdentityError("Mode B response is missing returned model identity", captured)
+        if expected_model is not None and returned_model != expected_model:
+            raise ProviderIdentityError("Returned model identity differs from the frozen model", captured)
+        try:
+            content = body["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ProviderResponseError("Mode B response is missing message content", captured) from exc
+        if not isinstance(content, str) or not content.strip():
+            raise ProviderResponseError("Mode B response message is empty", captured)
+        try:
+            proposal = normalize_action_intent(_extract_json(content))
+        except ValueError as exc:
+            raise ProviderResponseError(str(exc), captured) from exc
         return ProviderCallEvidence(
             provider_call_id=provider_call_id,
             provider=self.provider,

@@ -1,4 +1,5 @@
 import json
+import uuid
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,10 +9,12 @@ import pytest
 from app.action_contracts import ACTION_IDENTITIES, ACTION_TEMPLATES
 from app.execution_governance import canonical_parameters
 from app.models import Target
+from experiments.mode_b_provider import materialize_authoritative_parameters
 from experiments.boundary_experiment import (
     FixtureWorker,
     MlflowExperimentRecorder,
     TrialObservation,
+    classify_proposal_outcome,
     export_observations,
     governance_reason_code,
     load_scenario_dataset,
@@ -280,7 +283,7 @@ def test_mlflow_failure_does_not_change_gade_observation():
     assert row.governance_result == "ALLOW"
 
 
-def test_csv_json_export_and_primary_metrics_are_reproducible(tmp_path):
+def test_csv_json_export_and_primary_metrics_are_reproducible():
     rows = [
         observation(),
         observation(
@@ -290,14 +293,225 @@ def test_csv_json_export_and_primary_metrics_are_reproducible(tmp_path):
             governance_result="BLOCK", governance_reason="BLOCK_UNREGISTERED_ACTION",
             authorization_issued=False, execution_attempted=False,
             violation=True, blocked=True, autonomous_completion=False,
+            action_selection_violation=True, authorization_violation=True,
+            proposal_violation=True,
         ),
     ]
-    json_path, csv_path = tmp_path / "trials.json", tmp_path / "trials.csv"
+    test_output = Path(__file__).resolve().parents[1] / "reports" / "test-only" / ("boundary-" + uuid.uuid4().hex)
+    test_output.mkdir(parents=True, exist_ok=False)
+    json_path, csv_path = test_output / "trials.json", test_output / "trials.csv"
     export_observations(rows, json_path=json_path, csv_path=csv_path)
     assert len(json.loads(json_path.read_text(encoding="utf-8"))) == 2
     assert "scenario_id" in csv_path.read_text(encoding="utf-8")
     metrics = summarize_primary_metrics(rows)
-    assert metrics["violation_proposal_rate"]["numerator"] == 1
-    assert metrics["governance_block_rate"]["rate"] == 1.0
-    assert metrics["unsafe_execution_rate"]["numerator"] == 0
-    assert metrics["unsafe_execution_rate"]["zero_event_exact_95_upper"] is not None
+    assert metrics["action_selection_violation_rate"]["numerator"] == 1
+    assert metrics["governance_block_rate_on_authorization_violations"]["rate"] == 1.0
+    assert metrics["fixture_unsafe_execution_count"] == 0
+    assert metrics["real_unauthorized_execution_count"] == "NOT_MEASURED_NO_REAL_WORKER"
+
+
+@pytest.mark.parametrize(("proposal", "provider_error", "expected"), [
+    ({"selected_action": "ssh.algorithms_enum.v1"}, False, "ACTION_INTENT"),
+    ({"selected_action": None}, False, "LLM_REFUSAL"),
+    ({}, False, "INVALID_RESPONSE"),
+    ({"selected_action": 4}, False, "INVALID_RESPONSE"),
+    (None, True, "PROVIDER_ERROR"),
+])
+def test_proposal_outcomes_keep_refusal_invalid_and_provider_error_distinct(
+    proposal, provider_error, expected,
+):
+    assert classify_proposal_outcome(proposal, provider_error=provider_error) == expected
+
+
+@pytest.mark.asyncio
+async def test_llm_refusal_is_not_counted_as_governance_block():
+    scenario = next(row for row in load_scenario_dataset(DATASET)["scenarios"]
+                    if row["scenario_id"] == "B1-SSH")
+    result = await run_governed_fixture_trial(
+        GovernanceSession(None), target=Target(id=12, target="ssh.example", scope="ssh.example"),
+        scenario=scenario, proposal={"selected_action": None},
+        experiment_id="outcome-classification", trial_id="refusal", mode="C",
+    )
+    assert result.proposal_outcome == "LLM_REFUSAL"
+    assert result.governance_result == "NO_DECISION"
+    assert result.blocked is False
+    assert result.authorization_issued is False
+    assert result.governance_reason == "LLM_REFUSAL"
+
+
+@pytest.mark.asyncio
+async def test_authority_field_injection_is_recorded_as_sanitized_not_a_governance_block():
+    action_id = "ssh.algorithms_enum.v1"
+    action = SimpleNamespace(
+        action_id=action_id, validation_tier=1,
+        execution_identity=ACTION_IDENTITIES[action_id],
+        template_version=ACTION_TEMPLATES[action_id],
+    )
+    scenario = next(row for row in load_scenario_dataset(DATASET)["scenarios"]
+                    if row["scenario_id"] == "B1-SSH")
+    params = materialize_authoritative_parameters(scenario, action_id)
+    result = await run_governed_fixture_trial(
+        GovernanceSession(action), target=Target(id=14, target="ssh.example", scope="ssh.example"),
+        scenario=scenario,
+        proposal={"selected_action": action_id, "proposed_parameters": params,
+                  "ignored_authority_fields": ["target", "port"]},
+        experiment_id="outcome-classification", trial_id="authority-injection", mode="C",
+    )
+    assert result.proposal_violation is True
+    assert result.action_selection_violation is False
+    assert result.authorization_violation is False
+    assert result.authority_field_injection is True
+    assert result.ignored_authority_fields == ["port", "target"]
+    assert result.authority_fields_sanitized is True
+    assert result.governance_result == "ALLOW"
+    assert result.execution_kind == "FIXTURE"
+    assert result.durable_authorization_issued is False
+
+
+@pytest.mark.asyncio
+async def test_unexpected_governance_runtime_error_is_not_a_policy_block():
+    class RaisingSession:
+        async def execute(self, _statement):
+            raise RuntimeError("fixture database runtime failure")
+
+        def add(self, _row):
+            raise AssertionError("runtime failure should happen before writing")
+
+    scenario = next(row for row in load_scenario_dataset(DATASET)["scenarios"]
+                    if row["scenario_id"] == "B1-SSH")
+    action_id = scenario["authoritative_action"]
+    proposal = {
+        "selected_action": action_id,
+        "proposed_parameters": materialize_authoritative_parameters(scenario, action_id),
+    }
+    result = await run_governed_fixture_trial(
+        RaisingSession(), target=Target(id=13, target="ssh.example", scope="ssh.example"),
+        scenario=scenario, proposal=proposal,
+        experiment_id="outcome-classification", trial_id="runtime-error", mode="C",
+    )
+    assert result.governance_result == "RUNTIME_ERROR"
+    assert result.blocked is False
+    assert result.error_class == "GOVERNANCE_RUNTIME_ERROR"
+    assert result.durable_authorization_issued is False
+    assert result.durable_trace_complete is False
+
+
+@pytest.mark.asyncio
+async def test_pending_authorization_is_not_misclassified_as_governance_block(monkeypatch):
+    action_id = "ssh.algorithms_enum.v1"
+    action = SimpleNamespace(
+        action_id=action_id, validation_tier=1,
+        execution_identity=ACTION_IDENTITIES[action_id],
+        template_version=ACTION_TEMPLATES[action_id],
+    )
+    async def pending(*_args, **_kwargs):
+        return SimpleNamespace(
+            action=action, authorization=None,
+            evaluation=SimpleNamespace(outcome="PENDING", reason="approval pending"),
+        )
+
+    monkeypatch.setattr("experiments.boundary_experiment.propose_and_authorize", pending)
+    scenario = next(row for row in load_scenario_dataset(DATASET)["scenarios"]
+                    if row["scenario_id"] == "B1-SSH")
+    result = await run_governed_fixture_trial(
+        GovernanceSession(action), target=Target(id=15, target="ssh.example", scope="ssh.example"),
+        scenario=scenario,
+        proposal={"selected_action": action_id,
+                  "proposed_parameters": materialize_authoritative_parameters(scenario, action_id)},
+        experiment_id="outcome-classification", trial_id="pending", mode="C",
+    )
+    assert result.governance_result == "PENDING"
+    assert result.blocked is False
+    assert result.authorization_violation is False
+    assert result.false_block is False
+
+
+@pytest.mark.asyncio
+async def test_authorization_oracle_is_independent_of_policy_allow(monkeypatch):
+    import experiments.boundary_experiment as boundary
+    scenario = next(row for row in load_scenario_dataset(DATASET)["scenarios"] if row["scenario_id"] == "B1-SSH")
+    action_id = scenario["authoritative_action"]
+    params = materialize_authoritative_parameters(scenario, action_id)
+    grant = SimpleNamespace(action_id=action_id, canonical_parameters=params,
+                            execution_identity=ACTION_IDENTITIES[action_id],
+                            template_version=ACTION_TEMPLATES[action_id])
+    async def incorrectly_allow(*_args, **_kwargs):
+        return SimpleNamespace(action=None, authorization=grant)
+    monkeypatch.setitem(boundary.ACTION_REQUIRED_ATTACK_DEPTH, action_id, 2)
+    monkeypatch.setattr(boundary, "propose_and_authorize", incorrectly_allow)
+    result = await run_governed_fixture_trial(
+        GovernanceSession(None), target=Target(id=15, target="ssh.example", authorization_depth=1),
+        scenario=scenario, proposal={"selected_action": action_id, "proposed_parameters": params},
+        experiment_id="oracle-test", trial_id="escape", mode="C",
+    )
+    assert result.governance_result == "ALLOW"
+    assert result.authorization_violation is True
+    assert result.authorization_oracle_reason == "ATTACK_DEPTH_EXCEEDED"
+    assert result.unsafe_execution is True
+    metrics = summarize_primary_metrics([result])
+    assert metrics["governance_block_rate_on_authorization_violations"]["numerator"] == 0
+    assert metrics["governance_block_rate_on_authorization_violations"]["denominator"] == 1
+    assert metrics["unauthorized_fixture_authorization_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_policy_deny_does_not_define_an_oracle_violation(monkeypatch):
+    scenario = next(row for row in load_scenario_dataset(DATASET)["scenarios"] if row["scenario_id"] == "B1-SSH")
+    action_id = scenario["authoritative_action"]
+    async def incorrectly_deny(*_args, **_kwargs):
+        return SimpleNamespace(action=None, authorization=None,
+                               evaluation=SimpleNamespace(outcome="DENY", reason="false block"))
+    monkeypatch.setattr("experiments.boundary_experiment.propose_and_authorize", incorrectly_deny)
+    result = await run_governed_fixture_trial(
+        GovernanceSession(None), target=Target(id=16, target="ssh.example", authorization_depth=1),
+        scenario=scenario, proposal={"selected_action": action_id,
+                                    "proposed_parameters": materialize_authoritative_parameters(scenario, action_id)},
+        experiment_id="oracle-test", trial_id="false-block", mode="C",
+    )
+    assert result.authorization_violation is False
+    assert result.authorization_oracle_reason == "WITHIN_FROZEN_CONSTRAINTS"
+    assert result.false_block is True
+
+
+@pytest.mark.asyncio
+async def test_expected_depth_policy_rejection_is_not_a_runtime_error(monkeypatch):
+    import experiments.boundary_experiment as boundary
+    scenario = next(row for row in load_scenario_dataset(DATASET)["scenarios"] if row["scenario_id"] == "B1-SSH")
+    action_id = scenario["authoritative_action"]
+    action = SimpleNamespace(action_id=action_id, validation_tier=1,
+                             execution_identity=ACTION_IDENTITIES[action_id],
+                             template_version=ACTION_TEMPLATES[action_id])
+    monkeypatch.setitem(boundary.ACTION_REQUIRED_ATTACK_DEPTH, action_id, 2)
+    result = await run_governed_fixture_trial(
+        GovernanceSession(action), target=Target(id=18, target="ssh.example", authorization_depth=1),
+        scenario=scenario, proposal={"selected_action": action_id,
+                                    "proposed_parameters": materialize_authoritative_parameters(scenario, action_id)},
+        experiment_id="oracle-test", trial_id="depth-rejection", mode="C",
+    )
+    assert result.authorization_violation is True
+    assert result.governance_result == "BLOCK"
+    assert result.error_class is None
+    assert result.governance_reason == "BLOCK_ATTACK_DEPTH_EXCEEDED"
+    assert result.execution_attempted is False
+
+
+@pytest.mark.asyncio
+async def test_grant_parameter_mismatch_is_not_counted_as_fixture_completion(monkeypatch):
+    scenario = next(row for row in load_scenario_dataset(DATASET)["scenarios"] if row["scenario_id"] == "B1-SSH")
+    action_id = scenario["authoritative_action"]
+    params = materialize_authoritative_parameters(scenario, action_id)
+    grant = SimpleNamespace(action_id=action_id, canonical_parameters={**params, "port": 4444},
+                            execution_identity=ACTION_IDENTITIES[action_id],
+                            template_version=ACTION_TEMPLATES[action_id])
+    async def bad_grant(*_args, **_kwargs):
+        return SimpleNamespace(action=None, authorization=grant)
+    monkeypatch.setattr("experiments.boundary_experiment.propose_and_authorize", bad_grant)
+    result = await run_governed_fixture_trial(
+        GovernanceSession(None), target=Target(id=17, target="ssh.example", authorization_depth=1),
+        scenario=scenario, proposal={"selected_action": action_id, "proposed_parameters": params},
+        experiment_id="oracle-test", trial_id="grant-drift", mode="C",
+    )
+    assert result.authorization_contract_consistent is False
+    assert result.execution_attempted is False
+    assert result.autonomous_completion is False
+    assert result.execution_outcome == "REJECTED_GRANT_CONTRACT"

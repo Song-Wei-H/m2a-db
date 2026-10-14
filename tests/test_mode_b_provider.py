@@ -70,6 +70,7 @@ def test_materializer_uses_frozen_evidence_and_ignores_model_authority_fields():
     assert proposal["proposed_parameters"]["canonical_url"] == "http://web.example:80/"
     assert proposal["model_supplied_tier"] is None
     assert proposal["model_supplied_risk"] is None
+    assert proposal["ignored_authority_fields"] == intent["ignored_authority_fields"]
     assert intent["ignored_authority_fields"] == [
         "execution_identity", "model_supplied_risk", "model_supplied_tier",
         "proposed_parameters", "template",
@@ -118,3 +119,48 @@ def test_independent_call_gate_rejects_duplicate_identity(monkeypatch):
     calls = [adapter.call(SCENARIO), adapter.call(SCENARIO)]
     with pytest.raises(ValueError, match="Duplicate"):
         mode_b_provider.require_independent_calls(calls)
+
+
+def test_identity_mismatch_stops_before_parsing_invalid_content(monkeypatch):
+    monkeypatch.setattr(settings, "llm_model", "qwen-coder")
+    wrong = response(model="different-model")
+    wrong.json.return_value["choices"][0]["message"]["content"] = "not JSON"
+    request = MagicMock(return_value=wrong)
+    monkeypatch.setattr(mode_b_provider.httpx, "request", request)
+    with pytest.raises(mode_b_provider.ProviderIdentityError) as caught:
+        mode_b_provider.LiteLlmModeBAdapter().call(SCENARIO, expected_model="qwen-coder")
+    assert caught.value.evidence["returned_model"] == "different-model"
+    assert request.call_count == 1
+
+
+def test_matching_identity_and_invalid_proposal_preserves_raw_evidence(monkeypatch):
+    monkeypatch.setattr(settings, "llm_model", "qwen-coder")
+    invalid = response()
+    invalid.json.return_value["choices"][0]["message"]["content"] = "not JSON"
+    monkeypatch.setattr(mode_b_provider.httpx, "request", MagicMock(return_value=invalid))
+    with pytest.raises(mode_b_provider.ProviderResponseError) as caught:
+        mode_b_provider.LiteLlmModeBAdapter().call(SCENARIO, expected_model="qwen-coder")
+    assert caught.value.evidence["provider_call_id"] == "call-1"
+    assert caught.value.evidence["returned_model"] == "qwen-coder"
+    assert caught.value.evidence["response"]["choices"][0]["message"]["content"] == "not JSON"
+
+
+def test_configured_model_mismatch_makes_no_request(monkeypatch):
+    monkeypatch.setattr(settings, "llm_model", "different-model")
+    request = MagicMock()
+    monkeypatch.setattr(mode_b_provider.httpx, "request", request)
+    with pytest.raises(mode_b_provider.ProviderIdentityError):
+        mode_b_provider.LiteLlmModeBAdapter().call(SCENARIO, expected_model="qwen-coder")
+    request.assert_not_called()
+
+
+def test_authority_depth_and_protocol_fields_are_recorded_and_sanitized():
+    intent = mode_b_provider.normalize_action_intent({
+        "selected_action": SCENARIO.get("action", "http_security_headers.collect.v1"),
+        "reason": "test", "confidence": 0.8, "authorization_depth": 7,
+        "protocol": "udp", "service": "attacker", "scope": "0.0.0.0/0",
+    })
+    assert intent["ignored_authority_fields"] == ["authorization_depth", "protocol", "scope", "service"]
+    proposal = mode_b_provider.materialize_action_intent(SCENARIO, intent, raw_response={})
+    assert proposal["proposed_parameters"]["protocol"] == "tcp"
+    assert proposal["proposed_parameters"]["service"] == "http"
