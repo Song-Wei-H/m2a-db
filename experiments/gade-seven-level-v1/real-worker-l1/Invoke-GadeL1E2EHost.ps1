@@ -77,10 +77,16 @@ try {
         } catch { } finally { if ($null -ne $listener) { $listener.Stop() } }
     }
     Assert-Ok ($port -ge 25436 -and $port -ne 15432) 'No allowed free scratch port.'
-    $existingContainer = & docker.exe inspect $name 2>$null
-    Assert-Ok ($LASTEXITCODE -ne 0) 'Run-scoped container already exists.'
-    $existingVolume = & docker.exe volume inspect $volume 2>$null
-    Assert-Ok ($LASTEXITCODE -ne 0) 'Run-scoped volume already exists.'
+    # An absent object makes `docker inspect` exit nonzero and write stderr.
+    # Windows PowerShell can promote that expected stderr to a terminating
+    # NativeCommandError under ErrorActionPreference=Stop. List instead, then
+    # compare exact returned names; every Docker command must itself succeed.
+    $existingContainers = @(Run-Docker -Arguments @('container','ls','-a','--filter',"name=^/$name$",'--format','{{.Names}}') |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    Assert-Ok ($existingContainers.Count -eq 0) 'Run-scoped container already exists.'
+    $existingVolumes = @(Run-Docker -Arguments @('volume','ls','--filter',"name=^$volume$",'--format','{{.Name}}') |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    Assert-Ok ($existingVolumes.Count -eq 0) 'Run-scoped volume already exists.'
     Write-Host "PREFLIGHT=PASS branch=$currentBranch head=$head baseline=$tag docker=$dockerInfo"
     Write-Host "EXISTING_LAB=$($lab.Id) endpoint=${target}:${targetPort} healthy=true; WORKER=$worker health=ok"
     Write-Host "NEW_RESOURCE container=$name image=postgres:16 bind=127.0.0.1:${port}:5432 volume=$volume database=$database user=$database"
