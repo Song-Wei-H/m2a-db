@@ -30,6 +30,7 @@ async def test_persist_httpx_result_invokes_cve_matching_after_tool_result_flush
     db = MagicMock()
     db.add = MagicMock()
     db.flush = AsyncMock()
+    db.get = AsyncMock(return_value=None)
     db.execute = AsyncMock(
         side_effect=[
             FakeScalarResult(
@@ -196,6 +197,7 @@ async def test_persist_httpx_result_without_local_cve_data_does_not_crash():
     db = MagicMock()
     db.add = MagicMock()
     db.flush = AsyncMock()
+    db.get = AsyncMock(return_value=None)
     db.execute = AsyncMock(
         side_effect=[
             FakeScalarResult(rows=[]),

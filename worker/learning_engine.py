@@ -76,8 +76,6 @@ async def record_learning_feedback(
     evidence_type: str | None = None,
     recommended_action: str | None = None,
     success: bool | None = None,
-    was_success: bool | None = None,
-    confidence_delta: float = 0.0,
     learning_score: float = 0.5,
     reason: str | None = None,
     feedback: str | None = None,
@@ -85,8 +83,6 @@ async def record_learning_feedback(
     """
     Insert actual execution feedback into learning_feedback.
     """
-    if success is None:
-        success = was_success
     if success is None:
         success = False
 
@@ -100,8 +96,6 @@ async def record_learning_feedback(
                 evidence_type,
                 recommended_action,
                 success,
-                was_success,
-                confidence_delta,
                 learning_score,
                 reason,
                 feedback
@@ -114,8 +108,6 @@ async def record_learning_feedback(
                 :evidence_type,
                 :recommended_action,
                 :success,
-                :was_success,
-                :confidence_delta,
                 :learning_score,
                 :reason,
                 :feedback
@@ -129,8 +121,6 @@ async def record_learning_feedback(
             "evidence_type": evidence_type,
             "recommended_action": recommended_action,
             "success": success,
-            "was_success": was_success if was_success is not None else success,
-            "confidence_delta": confidence_delta,
             "learning_score": learning_score,
             "reason": reason,
             "feedback": feedback or reason,

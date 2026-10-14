@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, SmallInteger, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, Integer, Numeric, SmallInteger, String, Text, func
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
@@ -265,7 +265,7 @@ class LearningFeedback(Base):
     evidence_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     recommended_action: Mapped[str | None] = mapped_column(String(50), nullable=True)
     success: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    learning_score: Mapped[float] = mapped_column(Float, nullable=False)
+    learning_score: Mapped[float] = mapped_column(Numeric(3, 1, asdecimal=False), nullable=False)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     feedback: Mapped[str |  None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), server_default=func.now())

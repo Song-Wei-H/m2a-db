@@ -745,8 +745,6 @@ async def analyze_tool_result_and_generate_task(
                     evidence_type="vulnerability_scan_negative",
                     recommended_action="verify",
                     success=True,
-                    was_success=True,
-                    confidence_delta=0,
                     learning_score=0.8,
                     reason="nuclei_safe completed with no findings",
                     feedback="nuclei_safe completed successfully but found no vulnerability",

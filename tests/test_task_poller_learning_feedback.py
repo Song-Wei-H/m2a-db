@@ -8,11 +8,13 @@ from worker.tool_runner import TaskContext, ToolRunOutcome
 
 
 @pytest.mark.asyncio
-async def test_persist_result_creates_learning_feedback_with_task_context():
+async def test_persist_result_commits_core_result_and_marks_feedback_pending():
     db = MagicMock()
     db.add = MagicMock()
     db.flush = AsyncMock()
     db.execute = AsyncMock()
+    task = SimpleNamespace(execution_audit={"stage": "worker-complete"})
+    db.get = AsyncMock(return_value=task)
     ctx = TaskContext(
         task_id=10,
         target_id=1,
@@ -33,21 +35,17 @@ async def test_persist_result_creates_learning_feedback_with_task_context():
         error_message=None,
     )
 
-    with patch("worker.learning_feedback.create_learning_feedback", AsyncMock()) as mocked_feedback:
-        result_id = await _persist_result(db, ctx, outcome)
+    result_id = await _persist_result(db, ctx, outcome)
 
     assert result_id is None
-    mocked_feedback.assert_awaited_once()
-    _, tool_result = mocked_feedback.await_args.args[:2]
+    tool_result = db.add.call_args.args[0]
     assert tool_result.target_id == 1
     assert tool_result.open_port_id == 20
     assert tool_result.tool_task_id == 10
     assert tool_result.tool_name == "httpx_basic"
-    assert mocked_feedback.await_args.kwargs == {
-        "decision_id": 30,
-        "service": "https",
-        "recommended_action": None,
-    }
+    assert task.execution_audit["result_persisted"] is True
+    assert task.execution_audit["learning_feedback_status"] == "pending"
+    assert task.execution_audit["learning_feedback_retryable"] is True
 
 
 @pytest.mark.asyncio
@@ -72,7 +70,6 @@ async def test_create_learning_feedback_records_complete_existing_schema_fields(
             service="https",
             evidence_type="vulnerability_scan_negative",
             recommended_action="verify",
-            confidence_delta=0.0,
         )
 
     mocked_record.assert_awaited_once_with(
@@ -84,8 +81,6 @@ async def test_create_learning_feedback_records_complete_existing_schema_fields(
         evidence_type="vulnerability_scan_negative",
         recommended_action="verify",
         success=True,
-        was_success=True,
-        confidence_delta=0.0,
         learning_score=0.85,
         reason="Tool executed successfully. Useful evidence found.",
         feedback="Tool executed successfully. Useful evidence found.",
@@ -168,6 +163,8 @@ async def test_execute_task_remote_timeout_marks_failed_and_writes_tool_result()
     fail_db.execute = AsyncMock(return_value=FakeScalarResult(None))
     fail_db.add = MagicMock()
     fail_db.flush = AsyncMock()
+    failed_task = SimpleNamespace(execution_audit={"stage": "prepared"})
+    fail_db.get = AsyncMock(return_value=failed_task)
 
     timeout_reason = "remote tool timeout after 300s: dirb_safe target=198.51.100.13 port=443"
 
@@ -180,7 +177,7 @@ async def test_execute_task_remote_timeout_marks_failed_and_writes_tool_result()
     ), patch("worker.task_poller.validate_task_execution"), patch(
         "worker.task_poller.run_remote_tool",
         AsyncMock(side_effect=TimeoutError(timeout_reason)),
-    ), patch("worker.learning_feedback.create_learning_feedback", AsyncMock()), patch(
+    ), patch("worker.task_poller._record_learning_feedback", AsyncMock(return_value=False)), patch(
         "worker.task_poller.finalize_target_if_idle",
         AsyncMock(return_value=False),
     ):

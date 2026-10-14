@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Any
 
 from app.models import ToolResult
@@ -8,8 +7,6 @@ import worker.learning_engine as learning_engine
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
-
-logger = logging.getLogger(__name__)
 
 LEARNING_SCORE_SUCCESS = 0.70
 LEARNING_SCORE_FAILURE = 0.30
@@ -194,53 +191,34 @@ async def create_learning_feedback(
     service: str | None = None,
     evidence_type: str | None = None,
     recommended_action: str | None = None,
-    confidence_delta: float | None = None,
-    expected_confidence: float | None = None,
-    actual_outcome_confidence: float | None = None,
 ) -> None:
     """
     Create a LearningFeedback record based on a ToolResult.
 
-    This function is designed to never break the execution flow.
-    If there's an exception, it will be logged and ignored.
-    """
-    try:
-        learning_score, reason = calculate_learning_score(tool_result)
-        resolved_evidence_type = evidence_type or determine_evidence_type(tool_result)
-        resolved_service = determine_service(tool_result, service)
-        resolved_action = determine_recommended_action(tool_result, recommended_action)
-        resolved_confidence_delta = (
-            confidence_delta
-            if confidence_delta is not None
-            else calculate_confidence_delta(
-                expected_confidence=expected_confidence,
-                actual_outcome_confidence=actual_outcome_confidence
-                if actual_outcome_confidence is not None
-                else _actual_confidence(tool_result),
-            )
-        )
+    Persist feedback for an already-persisted ToolResult.
 
-        await learning_engine.record_learning_feedback(
-            session=session,
-            decision_id=decision_id,
-            tool_result_id=tool_result.id,
-            tool_name=tool_result.tool_name or "",
-            service=resolved_service,
-            evidence_type=resolved_evidence_type,
-            recommended_action=resolved_action,
-            success=tool_result.success,
-            was_success=tool_result.success,
-            confidence_delta=resolved_confidence_delta,
-            learning_score=learning_score,
-            reason=reason,
-            feedback=reason,
-        )
-    except Exception as exc:
-        logger.exception(
-            "Failed to create learning feedback for tool_result_id=%s: %s",
-            tool_result.id,
-            str(exc),
-        )
+    Errors deliberately propagate so the caller can record a retryable failure
+    in a separate transaction. Swallowing a PostgreSQL error here leaves the
+    session transaction aborted and hides the failure from that state machine.
+    """
+    learning_score, reason = calculate_learning_score(tool_result)
+    resolved_evidence_type = evidence_type or determine_evidence_type(tool_result)
+    resolved_service = determine_service(tool_result, service)
+    resolved_action = determine_recommended_action(tool_result, recommended_action)
+
+    await learning_engine.record_learning_feedback(
+        session=session,
+        decision_id=decision_id,
+        tool_result_id=tool_result.id,
+        tool_name=tool_result.tool_name or "",
+        service=resolved_service,
+        evidence_type=resolved_evidence_type,
+        recommended_action=resolved_action,
+        success=tool_result.success,
+        learning_score=learning_score,
+        reason=reason,
+        feedback=reason,
+    )
 
 
 def get_tool_result_status(tool_result: ToolResult) -> str:

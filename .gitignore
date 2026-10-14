@@ -49,3 +49,4 @@ test_results.txt
 reports/
 mlruns/
 .m2a-launcher.lock
+experiments/**/local-only/

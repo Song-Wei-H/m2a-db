@@ -159,8 +159,7 @@ class TestLearningFeedback:
                 mock_record.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_create_learning_feedback_exception_handling(self):
-        """Test that learning feedback creation doesn't break execution flow on exception."""
+    async def test_create_learning_feedback_propagates_failure_for_retry_tracking(self):
         # Create a mock session and tool result
         session = AsyncMock(spec=AsyncSession)
         tool_result = MagicMock()
@@ -173,9 +172,8 @@ class TestLearningFeedback:
         with patch('worker.learning_feedback.calculate_learning_score', side_effect=Exception("Test exception")), \
              patch('worker.learning_engine.record_learning_feedback') as mock_record:
             
-            # Even with an exception, the function should not raise an error
-            await create_learning_feedback(session, tool_result)
-            # The record_learning_feedback should not be called due to the exception
+            with pytest.raises(Exception, match="Test exception"):
+                await create_learning_feedback(session, tool_result)
             mock_record.assert_not_called()
 
     def test_get_tool_result_status_success(self):
@@ -213,6 +211,13 @@ def test_learning_feedback_decision_id_references_decision_scores():
     assert foreign_keys[0].target_fullname == "decision_scores.id"
 
 
+def test_learning_feedback_score_mapping_matches_migration_numeric_contract():
+    score_type = LearningFeedback.__table__.c.learning_score.type
+    assert score_type.precision == 3
+    assert score_type.scale == 1
+    assert score_type.asdecimal is False
+
+
 def test_learning_feedback_fk_migration_targets_decision_scores():
     migration = Path("initdb/015_learning_feedback_decision_score_fk.sql").read_text()
 
@@ -241,18 +246,16 @@ async def test_record_learning_feedback_writes_complete_fields():
         evidence_type="http_service",
         recommended_action="continue",
         success=True,
-        was_success=True,
-        confidence_delta=0.15,
         learning_score=0.85,
         reason="HTTP service confirmed",
     )
 
     sql = str(session.execute.await_args.args[0])
     params = session.execute.await_args.args[1]
-    assert "was_success" in sql
-    assert "confidence_delta" in sql
-    assert params["was_success"] is True
-    assert params["confidence_delta"] == 0.15
+    assert "success" in sql
+    assert "was_success" not in sql
+    assert "confidence_delta" not in sql
+    assert params["success"] is True
     assert params["learning_score"] == 0.85
 
 

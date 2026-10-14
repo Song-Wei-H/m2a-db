@@ -137,7 +137,7 @@ Expected result:
 
 - `learning_feedback.tool_result_id` is populated.
 - `decision_id` points to the associated `decision_scores` row.
-- `tool_name`, `service`, `evidence_type`, `recommended_action`, `success`, `was_success`, `confidence_delta`, `learning_score`, and `reason` are populated when the model supports them.
+- `tool_name`, `service`, `evidence_type`, `recommended_action`, `success`, `learning_score`, and `reason` are persisted in `learning_feedback`. `success` is the canonical execution outcome; duplicate `was_success` and non-persisted `confidence_delta` are not database fields.
 - Timeout or blocked execution reduces the learning score.
 
 Demo talking point:

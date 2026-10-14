@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import async_session
 from app.execution_governance import PROTECTED_VALIDATION_TOOLS, canonical_parameters, parameter_hash, utcnow_naive
-from app.models import CommandTemplate, ExecutionAuthorization, OpenPort, Target, ToolResult, ToolTask, ToolRegistry
+from app.models import CommandTemplate, ExecutionAuthorization, LearningFeedback, OpenPort, Target, ToolResult, ToolTask, ToolRegistry
 from app.tool_task_constants import (
     EXECUTABLE_APPROVAL_STATUSES,
     FAILED,
@@ -147,8 +147,6 @@ async def _load_task_context(db: AsyncSession, task: ToolTask) -> TaskContext:
 
 
 async def _persist_result(db: AsyncSession, ctx: TaskContext, outcome) -> int:
-    from worker.learning_feedback import create_learning_feedback
-    
     row = ToolResult(
         target_id=ctx.target_id,
         open_port_id=ctx.open_port_id,
@@ -183,18 +181,6 @@ async def _persist_result(db: AsyncSession, ctx: TaskContext, outcome) -> int:
         except Exception:
             logger.exception("Failed to match CVEs for tool_result_id=%s", row.id)
     
-    # Create learning feedback record
-    try:
-        await create_learning_feedback(
-            db,
-            row,
-            decision_id=ctx.decision_score_id,
-            service=ctx.service,
-            recommended_action="verify" if not outcome.success else None,
-        )
-    except Exception:
-        # Log but don't fail the main execution flow
-        logger.exception("Failed to create learning feedback for tool_result_id=%s", row.id)
     if outcome.success and ctx.tool_name == "nmap_service":
         ports = parse_nmap_output(outcome.raw_output)
 
@@ -224,6 +210,17 @@ async def _persist_result(db: AsyncSession, ctx: TaskContext, outcome) -> int:
                 )
             )
 
+    task = await db.get(ToolTask, ctx.task_id)
+    if task is not None:
+        audit = dict(task.execution_audit or {})
+        audit.update({
+            "result_persisted": True,
+            "tool_result_id": row.id,
+            "learning_feedback_status": "pending",
+            "learning_feedback_retryable": True,
+        })
+        task.execution_audit = audit
+
     await db.execute(
         update(ToolTask)
         .where(ToolTask.id == ctx.task_id)
@@ -231,6 +228,90 @@ async def _persist_result(db: AsyncSession, ctx: TaskContext, outcome) -> int:
     )
 
     return row.id
+
+
+async def _record_learning_feedback(tool_result_id: int) -> bool:
+    """Persist derived feedback in its own transaction, idempotently."""
+    from worker.learning_feedback import create_learning_feedback
+
+    try:
+        async with async_session() as db, db.begin():
+            result = await db.get(ToolResult, tool_result_id)
+            if result is None:
+                raise LookupError(f"tool_result_id={tool_result_id} does not exist")
+            task = await db.get(ToolTask, result.tool_task_id, with_for_update=True)
+            if task is None:
+                raise LookupError(f"tool_task_id={result.tool_task_id} does not exist")
+
+            existing = await db.execute(
+                select(LearningFeedback.id)
+                .where(LearningFeedback.tool_result_id == tool_result_id)
+                .limit(1)
+            )
+            if existing.scalar_one_or_none() is None:
+                await create_learning_feedback(
+                    db,
+                    result,
+                    decision_id=task.decision_score_id,
+                )
+
+            audit = dict(task.execution_audit or {})
+            audit.update({
+                "result_persisted": True,
+                "tool_result_id": tool_result_id,
+                "learning_feedback_status": "complete",
+                "learning_feedback_retryable": False,
+            })
+            audit.pop("learning_feedback_error", None)
+            task.execution_audit = audit
+        return True
+    except Exception as exc:
+        logger.exception("LearningFeedback write failed for persisted tool_result_id=%s", tool_result_id)
+        try:
+            async with async_session() as db, db.begin():
+                result = await db.get(ToolResult, tool_result_id)
+                if result is None:
+                    raise LookupError(f"tool_result_id={tool_result_id} disappeared")
+                task = await db.get(ToolTask, result.tool_task_id, with_for_update=True)
+                if task is None:
+                    raise LookupError(f"tool_task_id={result.tool_task_id} disappeared")
+                audit = dict(task.execution_audit or {})
+                audit.update({
+                    "result_persisted": True,
+                    "tool_result_id": tool_result_id,
+                    "learning_feedback_status": "failed",
+                    "learning_feedback_retryable": True,
+                    "learning_feedback_error": str(exc)[:2000],
+                })
+                task.execution_audit = audit
+        except Exception:
+            logger.exception(
+                "Could not record retryable LearningFeedback failure for tool_result_id=%s",
+                tool_result_id,
+            )
+        return False
+
+
+async def _retry_pending_learning_feedback(*, limit: int = 50) -> int:
+    """Retry derived feedback without re-running tasks or recreating results."""
+    async with async_session() as db:
+        result = await db.execute(
+            select(ToolResult.id)
+            .join(ToolTask, ToolTask.id == ToolResult.tool_task_id)
+            .where(
+                ToolTask.execution_audit["learning_feedback_status"].as_string().in_(("pending", "failed")),
+                ToolTask.execution_audit["learning_feedback_retryable"].as_boolean().is_(True),
+            )
+            .order_by(ToolResult.id)
+            .limit(limit)
+        )
+        result_ids = [row[0] for row in result.all()]
+
+    completed = 0
+    for result_id in result_ids:
+        if await _record_learning_feedback(result_id):
+            completed += 1
+    return completed
 
 
 def _infer_risk_level(tool_name: str, outcome) -> str | None:
@@ -266,8 +347,7 @@ async def _fail_task(
     *,
     command: str | None = None,
 ) -> None:
-    from worker.learning_feedback import create_learning_feedback
-    
+    result_id: int | None = None
     async with async_session() as db, db.begin():
         await db.execute(
             update(ToolTask)
@@ -291,18 +371,20 @@ async def _fail_task(
         row.output_hash = parameter_hash(result_output(row))
         db.add(row)
         await db.flush()
-        
-        # Create learning feedback record
-        try:
-            await create_learning_feedback(
-                db,
-                row,
-                decision_id=snapshot.decision_score_id,
-                recommended_action="verify",
-            )
-        except Exception:
-            # Log but don't fail the main execution flow
-            logger.exception("Failed to create learning feedback for tool_result_id=%s", row.id)
+        result_id = row.id
+        task = await db.get(ToolTask, snapshot.id)
+        if task is not None:
+            audit = dict(task.execution_audit or {})
+            audit.update({
+                "result_persisted": True,
+                "tool_result_id": result_id,
+                "learning_feedback_status": "pending",
+                "learning_feedback_retryable": True,
+            })
+            task.execution_audit = audit
+
+    if result_id is not None:
+        await _record_learning_feedback(result_id)
 
     logger.error("tool_task_id=%s failed: %s", snapshot.id, reason)
     await finalize_target_if_idle(snapshot.target_id, stop_reason="task_failed")
@@ -480,6 +562,11 @@ async def execute_task(task_id: int) -> None:
     async with async_session() as db, db.begin():
         result_id = await _persist_result(db, ctx, outcome)
 
+    # The ToolResult transaction is committed before its derived feedback is
+    # attempted. A feedback failure is recorded as retryable and cannot undo
+    # the result or its worker receipt.
+    await _record_learning_feedback(result_id)
+
     # Auto loop integration
     try:
         # Increment target round after successful task completion
@@ -514,6 +601,7 @@ async def execute_task(task_id: int) -> None:
 
 
 async def poll_once() -> int:
+    await _retry_pending_learning_feedback()
     async with async_session() as db, db.begin():
         tasks = await fetch_pending_tasks(db)
 
