@@ -60,7 +60,7 @@ async def run() -> None:
     require(output.is_dir(), "output directory missing")
     require(settings.enforce_target_scope, "ENFORCE_TARGET_SCOPE must be true")
     require(settings.allowed_scopes_list == [SCOPE], "only the exact Lab /32 is allowed")
-    require(settings.kali_worker_url.rstrip("/") == "http://10.56.64.121:8000", "Worker endpoint drift")
+    require(settings.kali_worker_url.rstrip("/") == "http://10.56.64.121:8001", "Dedicated GADE Worker endpoint drift")
     url = urlsplit(settings.database_url)
     require(url.hostname == "127.0.0.1" and url.port == int(os.environ["GADE_L1_DB_PORT"]), "database endpoint drift")
     require(url.path.lstrip("/") == f"gade_{run_id}_fresh", "database identity drift")

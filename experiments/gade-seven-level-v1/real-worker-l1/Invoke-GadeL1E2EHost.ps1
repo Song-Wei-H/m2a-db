@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([switch]$PreflightOnly)
+param([switch]$PreflightOnly, [switch]$AllowDirtySourceForStageValidation)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -8,7 +8,7 @@ $baseline = 'gade-preexp-v1'
 $branch = 'experiment/gade-seven-level-v1'
 $target = '10.56.66.119'
 $targetPort = 18080
-$worker = 'http://10.56.64.121:8000'
+$worker = 'http://10.56.64.121:8001'
 $runId = [guid]::NewGuid().ToString('N').Substring(0,12)
 $correlationId = [guid]::NewGuid().ToString('D').ToLowerInvariant()
 $name = "gade-preexp-$runId-fresh" # required by the existing exact-identity migration runner
@@ -17,7 +17,7 @@ $volume = "gade_l1_${runId}_pgdata"
 $output = Join-Path $PSScriptRoot "local-only\$runId"
 $migrationRunner = Join-Path $repo 'scripts\Invoke-MigrationSmoke.ps1'
 $driver = Join-Path $PSScriptRoot 'run_l1_e2e.py'
-$verifier = Join-Path $PSScriptRoot 'verify_legacy_l1_evidence.py'
+$verifier = Join-Path $PSScriptRoot 'verify_native_l1_evidence.py'
 $python = Join-Path $repo '.venv\Scripts\python.exe'
 $port = 0
 $phase = 'READ_ONLY_PREFLIGHT'
@@ -32,6 +32,17 @@ function Run-Docker([string[]]$Arguments) {
     if ($code -ne 0) { throw "Docker command failed (exit $code): $($outputText -join ' ')" }
     return ($outputText -join "`n").Trim()
 }
+function Run-DockerCaptured([string[]]$Arguments, [string]$StdoutPath, [string]$StderrPath) {
+    $exe = (Get-Command docker.exe -ErrorAction Stop).Source
+    $quoted = foreach ($argument in $Arguments) {
+        if ($argument -match '[\s"]') { '"' + $argument.Replace('"','\"') + '"' } else { $argument }
+    }
+    $process = Start-Process -FilePath $exe -ArgumentList ($quoted -join ' ') -WorkingDirectory $repo `
+        -NoNewWindow -Wait -PassThru -RedirectStandardOutput $StdoutPath -RedirectStandardError $StderrPath
+    $stdout = if (Test-Path -LiteralPath $StdoutPath) { Get-Content -LiteralPath $StdoutPath -Raw } else { '' }
+    $stderr = if (Test-Path -LiteralPath $StderrPath) { Get-Content -LiteralPath $StderrPath -Raw } else { '' }
+    return [pscustomobject]@{ ExitCode=$process.ExitCode; Stdout=$stdout; Stderr=$stderr }
+}
 function Save-Json([string]$Path, $Object) {
     $Object | ConvertTo-Json -Depth 15 | Set-Content -LiteralPath $Path -Encoding utf8
 }
@@ -45,7 +56,14 @@ try {
     Assert-Ok ($LASTEXITCODE -eq 0 -and $tag -match '^[0-9a-f]{40}$') 'Baseline tag missing.'
     Assert-Ok ($tag -ceq '9eaea6a355a07687031e8c43465c17bc5fce1145') 'Frozen baseline tag target changed.'
     Assert-Ok ($currentBranch -ceq $branch) "Wrong branch $currentBranch"
-    Assert-Ok (@(& git status --porcelain).Count -eq 0) 'Experiment working tree is not clean.'
+    $gitStatus = @(& git status --porcelain --untracked-files=all)
+    Assert-Ok ($LASTEXITCODE -eq 0) 'Could not read Git working-tree status.'
+    $sourceState = if ($gitStatus.Count -eq 0) { 'CLEAN' } else { 'DIRTY_STAGE_VALIDATION' }
+    if ($gitStatus.Count -gt 0 -and -not $AllowDirtySourceForStageValidation) {
+        throw 'Working tree is dirty. For this one-action stage validation only, explicitly pass -AllowDirtySourceForStageValidation; this run cannot be labelled as a formal sample.'
+    }
+    $gitStatusText = if ($gitStatus.Count) { $gitStatus -join [Environment]::NewLine } else { '(clean)' }
+    Set-Content -LiteralPath (Join-Path $output 'git-status.txt') -Value $gitStatusText -Encoding utf8
     Assert-Ok (Test-Path -LiteralPath $python) 'Repository .venv Python missing.'
     Assert-Ok (Test-Path -LiteralPath $migrationRunner) 'Migration runner missing.'
     $files = @(Get-ChildItem -LiteralPath (Join-Path $repo 'initdb') -Filter '*.sql' -File |
@@ -60,6 +78,12 @@ try {
     Assert-Ok ($lab.Name -ceq '/m2a-mode-b-target' -and $lab.Config.Image -ceq 'docker/welcome-to-docker:latest' -and
         $lab.State.Running -and $lab.State.Health.Status -ceq 'healthy' -and
         @($lab.NetworkSettings.Networks.PSObject.Properties.Name) -ccontains 'm2a-mode-b-lab') 'Existing Lab container identity or health drift.'
+    $labNetwork = (Run-Docker -Arguments @('network','inspect','--format','{{json .}}','m2a-mode-b-lab') | ConvertFrom-Json)
+    $labNetworkContainer = $labNetwork.Containers.PSObject.Properties[$lab.Id]
+    Assert-Ok ($labNetwork.Driver -ceq 'bridge' -and $labNetwork.IPAM.Config.Count -ge 1 -and
+        $null -ne $labNetworkContainer -and $labNetworkContainer.Value.IPv4Address -and
+        $lab.NetworkSettings.Networks.'m2a-mode-b-lab'.Gateway -ceq $labNetwork.IPAM.Config[0].Gateway) 'Could not verify existing Lab network gateway/container attachment.'
+    $targetLogGateway = [string]$labNetwork.IPAM.Config[0].Gateway
     $bind = @($lab.NetworkSettings.Ports.'8080/tcp')
     Assert-Ok ($bind.Count -eq 1 -and $bind[0].HostIp -ceq $target -and
         $bind[0].HostPort -ceq [string]$targetPort) 'Existing Lab binding mismatch.'
@@ -69,9 +93,13 @@ try {
     Assert-Ok ($labResponse.StatusCode -eq 200 -and $labResponse.Content.Trim() -ceq 'mode-b-target-ready') 'Lab HTTP response drift.'
     $workerHealthResponse = Invoke-WebRequest -Uri "$worker/health" -UseBasicParsing -TimeoutSec 5
     $health = $workerHealthResponse.Content | ConvertFrom-Json
+    $workerBuildSha = (Get-FileHash (Join-Path $repo 'kali_worker\app.py') -Algorithm SHA256).Hash.ToLowerInvariant()
     Assert-Ok ($health.status -ceq 'ok' -and $health.version -ceq 'evidence-tools-v1' -and
-        @($health.allowed_tools) -ccontains 'http_security_headers') 'Worker health or tool allowlist mismatch.'
-    Assert-Ok (-not ($health.PSObject.Properties.Name -ccontains 'build_sha256')) 'Worker now exposes a build hash; stop and re-audit the API mode instead of assuming legacy behavior.'
+        $health.build_sha256 -ceq $workerBuildSha -and
+        $health.scope_enforced_by_worker -eq $true -and
+        @($health.allowed_scopes).Count -eq 1 -and
+        @($health.allowed_scopes)[0] -ceq '10.56.66.119/32' -and
+        @($health.allowed_tools) -ccontains 'http_security_headers') 'Dedicated Worker health/build/scope/action mismatch.'
     $openApi = Invoke-RestMethod -Uri "$worker/openapi.json" -TimeoutSec 5
     $executePathProperty = $openApi.paths.PSObject.Properties['/execute']
     Assert-Ok ($null -ne $executePathProperty) 'Worker OpenAPI does not expose /execute.'
@@ -92,8 +120,10 @@ try {
     foreach ($field in $workerRequiredFields) {
         Assert-Ok (@('tool','target','port','service') -ccontains $field) "Legacy Worker API has unsupported required field '$field'."
     }
-    foreach ($field in @('request_id','correlation_id','template_id','expected_worker_build_sha256')) {
-        Assert-Ok (-not ($workerRequestProperties -ccontains $field)) "Worker API is no longer the observed legacy contract ('$field' is present). Stop for contract review."
+    foreach ($field in @('action_id','execution_identity','authorization_parameters',
+                         'authorization_parameters_hash','task_id','authorization_id','request_id',
+                         'correlation_id','template_id','expected_worker_build_sha256')) {
+        Assert-Ok ($workerRequestProperties -ccontains $field) "Dedicated Worker API lacks governed request field '$field'."
     }
     $workerDate = $null
     $labDate = $null
@@ -105,8 +135,12 @@ try {
     $workerLabSkew = if ($null -ne $workerDate -and $null -ne $labDate) { [math]::Round(($workerDate - $labDate).TotalSeconds,3) } else { $null }
     $targetLogsAvailable = $true
     $targetLogPreflightError = $null
-    try { $null = Run-Docker -Arguments @('logs','--tail','1',$lab.Id) }
-    catch { $targetLogsAvailable = $false; $targetLogPreflightError = $_.Exception.Message }
+    $precheckLogs = Run-DockerCaptured -Arguments @('logs','--tail','1',$lab.Id) `
+        -StdoutPath (Join-Path $output 'docker-precheck.stdout.log') -StderrPath (Join-Path $output 'docker-precheck.stderr.log')
+    if ($precheckLogs.ExitCode -ne 0) {
+        $targetLogsAvailable = $false
+        $targetLogPreflightError = "docker logs exit=$($precheckLogs.ExitCode): $($precheckLogs.Stderr.Trim())"
+    }
     for ($candidate = 25436; $candidate -le 25999; $candidate++) {
         $listener = $null
         try {
@@ -129,21 +163,25 @@ try {
     Assert-Ok ($existingVolumes.Count -eq 0) 'Run-scoped volume already exists.'
     Write-Host "PREFLIGHT=PASS branch=$currentBranch head=$head baseline=$tag docker=$dockerInfo"
     Write-Host "RUN_ID=$runId EXPERIMENT_CORRELATION_ID=$correlationId"
-    Write-Host "EXISTING_LAB=$($lab.Id) endpoint=${target}:${targetPort} healthy=true; WORKER=$worker health=ok version=$($health.version)"
-    Write-Host "LEGACY_API=PASS request_fields=$($workerRequestProperties -join ',') native_request_correlation=unavailable native_receipt=unavailable"
+    Write-Host ("EXISTING_LAB={0} endpoint={1}:{2} healthy=true; WORKER={3} health=ok version={4} build_sha256={5} scope=10.56.66.119/32" -f $lab.Id,$target,$targetPort,$worker,$health.version,$workerBuildSha)
+    Write-Host "LAB_NETWORK=$($labNetwork.Id) driver=$($labNetwork.Driver) gateway=$targetLogGateway target_container_ip=$($labNetworkContainer.Value.IPv4Address)"
+    Write-Host "NATIVE_API=PASS request_fields=$($workerRequestProperties -join ',') native_receipt=required"
     Write-Host "CLOCK_SKEW_SECONDS worker-host=$workerHostSkew lab-host=$labHostSkew worker-lab=$workerLabSkew"
     Write-Host "TARGET_ACCESS_LOGS_PRECHECK=$(if($targetLogsAvailable){'AVAILABLE'}else{'UNAVAILABLE'})"
     Write-Host "NEW_RESOURCE container=$name image=postgres:16 bind=127.0.0.1:${port}:5432 volume=$volume database=$database user=$database"
     Write-Host 'ACTION=http_security_headers.collect.v1 fixed HEAD / User-Agent=M2A-Worker/1; target=10.56.66.119/32 port=18080/TCP; exactly one new ToolTask ID will be executed.'
     Write-Host 'MIGRATIONS=001..037 on the new empty database only; no existing database, container, firewall rule, or batch dispatcher is changed.'
     Write-Host "MIGRATION_FILES=$($files.Name -join ',')"
-    Write-Host 'LEGACY_ADAPTER=local-only; sends only tool,target,port,service after local GADE authorization; remote Worker will not be changed.'
+    Write-Host 'NATIVE_GOVERNED_REQUEST=local GADE authorization metadata is sent to the dedicated :8001 Worker; shared :8000 Worker is untouched.'
     if ($PreflightOnly) {
         Save-Json (Join-Path $output 'preflight.json') ([ordered]@{
             run_id=$runId; experiment_correlation_id=$correlationId; status='PREFLIGHT_ONLY_PASS';
             branch=$currentBranch; head=$head; baseline_tag=$baseline; baseline_commit=$tag;
             container=$name; volume=$volume; database=$database; candidate_port=$port;
             target=$target; target_port=$targetPort; worker=$worker; worker_version=$health.version;
+            worker_build_sha256=$workerBuildSha; worker_scope=@($health.allowed_scopes);
+            lab_network_id=$labNetwork.Id; lab_network_gateway=$targetLogGateway;
+            source_state=$sourceState;
             worker_request_properties=$workerRequestProperties; target_access_logs_available=$targetLogsAvailable;
             clock_check=@{worker_host_skew_seconds=$workerHostSkew;lab_host_skew_seconds=$labHostSkew;worker_lab_skew_seconds=$workerLabSkew}
         })
@@ -159,10 +197,10 @@ try {
         container=$name; volume=$volume; database=$database; port=$port;
         target=$target; target_port=$targetPort; authorized_scope='10.56.66.119/32'; worker=$worker;
         action='http_security_headers.collect.v1'; worker_version=$health.version;
-        worker_api_mode='legacy'; worker_request_properties=$workerRequestProperties;
-        worker_build_sha256='not_exposed_by_legacy_health';
-        worker_source_sha256_last_readonly='9cc89630fb2af6e38307b3bf55fad5012a9fbfe25a3c2de75c7df3a8cfa4d0f9';
-        worker_source_hash_currently_reverified=$false;
+        worker_api_mode='native'; worker_request_properties=$workerRequestProperties;
+        worker_build_sha256=$workerBuildSha; source_state=$sourceState;
+        lab_network_id=$labNetwork.Id; lab_network_gateway=$targetLogGateway;
+        source_status_sha256=(Get-FileHash (Join-Path $output 'git-status.txt') -Algorithm SHA256).Hash.ToLowerInvariant();
         experiment_correlation_id=$correlationId;
         target_access_logs_precheck=$targetLogsAvailable; target_access_log_precheck_error=$targetLogPreflightError;
         clock_check=@{worker_host_skew_seconds=$workerHostSkew;lab_host_skew_seconds=$labHostSkew;worker_lab_skew_seconds=$workerLabSkew};
@@ -217,7 +255,7 @@ try {
     $env:GADE_L1_DB_PORT = [string]$port
     $env:GADE_L1_OUTPUT = $output
     $env:GADE_L1_CORRELATION_ID = $correlationId
-    $env:M2A_WORKER_API_MODE = 'legacy'
+    $env:M2A_WORKER_API_MODE = 'native'
     $driverExitCode = $null
     try {
         $driverStdout = Join-Path $output 'driver.stdout.log'
@@ -232,6 +270,7 @@ try {
             Set-Content -LiteralPath $driverLog -Encoding utf8
         $driverExitCode = $driverProcess.ExitCode
         $manifest['driver_exit_code'] = $driverExitCode
+        Assert-Ok ($driverExitCode -eq 0) "L1 driver failed (exit $driverExitCode); see $driverLog."
     } finally {
         foreach($key in $keys) {
             [Environment]::SetEnvironmentVariable($key, $priorEnvironment[$key], 'Process')
@@ -243,8 +282,11 @@ try {
     $requestStart = [string]$state.worker_exchange.request_sent_at_utc
     if (-not [string]::IsNullOrWhiteSpace($requestStart)) {
         try {
-            Run-Docker -Arguments @('logs','--timestamps','--since',$requestStart,$lab.Id) |
-                Set-Content -LiteralPath $targetLogPath -Encoding utf8
+            $capturedLogs = Run-DockerCaptured -Arguments @('logs','--timestamps','--since',$requestStart,$lab.Id) `
+                -StdoutPath (Join-Path $output 'target-log-capture.stdout.log') `
+                -StderrPath (Join-Path $output 'target-log-capture.stderr.log')
+            Assert-Ok ($capturedLogs.ExitCode -eq 0) "Target access log capture failed (exit $($capturedLogs.ExitCode)): $($capturedLogs.Stderr.Trim())"
+            Set-Content -LiteralPath $targetLogPath -Value $capturedLogs.Stdout -Encoding utf8
         } catch {
             Set-Content -LiteralPath (Join-Path $output 'target-log-capture-error.txt') -Value $_.Exception.Message -Encoding utf8
             Set-Content -LiteralPath $targetLogPath -Value '' -Encoding utf8
@@ -255,13 +297,13 @@ try {
     $verifierStdout = Join-Path $output 'verifier.stdout.log'
     $verifierStderr = Join-Path $output 'verifier.stderr.log'
     $verifierLog = Join-Path $output 'verifier.log'
-    $verifierArgs = '"' + $verifier + '" --evidence-dir "' + $output + '" --target-log "' + $targetLogPath + '"'
+    $verifierArgs = '"' + $verifier + '" --evidence-dir "' + $output + '" --target-log "' + $targetLogPath + '" --worker-build-sha256 "' + $workerBuildSha + '" --target-log-source-gateway "' + $targetLogGateway + '"'
     $verifierProcess = Start-Process -FilePath $python -ArgumentList $verifierArgs -WorkingDirectory $repo `
         -NoNewWindow -Wait -PassThru -RedirectStandardOutput $verifierStdout -RedirectStandardError $verifierStderr
     @('=== VERIFIER STDOUT ===',(Get-Content -LiteralPath $verifierStdout -Raw),
       '=== VERIFIER STDERR ===',(Get-Content -LiteralPath $verifierStderr -Raw)) |
         Set-Content -LiteralPath $verifierLog -Encoding utf8
-    Assert-Ok ($verifierProcess.ExitCode -eq 0) 'Legacy evidence verifier failed; no result grade was assigned.'
+    Assert-Ok ($verifierProcess.ExitCode -eq 0) 'Native L1 evidence verifier failed; original logs and state are preserved.'
     $verdict = Get-Content -LiteralPath (Join-Path $output 'final-verdict.json') -Raw | ConvertFrom-Json
     $manifest.status = $verdict.final_status
     $manifest.evidence_grade = $verdict.evidence_grade
@@ -274,7 +316,7 @@ try {
     Save-Json (Join-Path $output 'manifest.json') $manifest
     Write-Host "GOVERNANCE_AUTHORIZATION=$($state.decision.outcome) proposal=$($state.ids.proposal_id) decision=$($state.ids.decision_id) grant=$($state.ids.authorization_id) task=$($state.ids.tool_task_id)"
     Write-Host "WORKER_HTTP_RESULT=$($state.worker_exchange.http_status) app_status=$($state.worker_exchange.application_status) request_id=$($state.request_id) correlation_id=$($state.experiment_correlation_id)"
-    Write-Host "NATIVE_WORKER_RECEIPT=$($state.worker_exchange.native_receipt_status) TOOL_RESULT_PERSISTED=$($null -ne $state.tool_result.id) TRACE_COMPLETENESS=$($state.trace.status)"
+    Write-Host "NATIVE_WORKER_RECEIPT=$($state.trace.native_worker_receipt_status) TOOL_RESULT_PERSISTED=$($null -ne $state.tool_result.id) TRACE_COMPLETENESS=$($state.trace.status)"
     Write-Host "FINAL_EVIDENCE_GRADE=$($verdict.evidence_grade) FINAL_STATUS=$($verdict.final_status) EVIDENCE=$output"
 } catch {
     if (-not (Test-Path -LiteralPath $output)) { New-Item -ItemType Directory -Path $output -Force | Out-Null }
