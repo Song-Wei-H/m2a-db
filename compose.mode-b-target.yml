@@ -1,4 +1,36 @@
 services:
+  mode-b-l2-auth:
+    build:
+      context: ./lab/mode-b-target
+      dockerfile: Dockerfile.l2-auth
+    image: m2a-mode-b-l2-auth:local
+    container_name: m2a-mode-b-l2-auth
+    restart: unless-stopped
+    user: "101:101"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=4m,mode=1777
+    mem_limit: 64m
+    cpus: 0.15
+    pids_limit: 32
+    env_file:
+      - ./lab/mode-b-target/.env.l2.local
+    environment:
+      GADE_L2_SESSION_TTL_SECONDS: "60"
+    expose:
+      - "8081"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/lab/healthz', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 2s
+    networks:
+      - mode-b-lab
+
   mode-b-target:
     image: docker/welcome-to-docker:latest
     container_name: m2a-mode-b-target
@@ -25,6 +57,9 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+    depends_on:
+      mode-b-l2-auth:
+        condition: service_healthy
     networks:
       - mode-b-lab
 

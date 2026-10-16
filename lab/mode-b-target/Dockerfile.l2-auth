@@ -1,0 +1,9 @@
+FROM python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ENV GADE_L3_STATE_DIR=/tmp/gade-l3
+WORKDIR /app
+COPY l2_auth.py /app/l2_auth.py
+COPY l3_execution_task.py /app/l3_execution_task.py
+USER 101:101
+EXPOSE 8081
+CMD ["python", "/app/l2_auth.py"]

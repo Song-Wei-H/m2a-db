@@ -5,6 +5,7 @@ import http.client
 import ipaddress
 import json
 import logging
+import os
 import shlex
 import socket
 import ssl
@@ -32,6 +33,17 @@ ALLOWED_TOOLS = {
     "ssh-enum", "mysql-info", "tls_certificate",
     "http_security_headers", "dns_metadata",
 }
+# This action is visible only through the dedicated GADE experiment profile.
+# It is deliberately excluded from the shared Worker profile's allowlist.
+GADE_EXPERIMENT_ONLY_TOOLS = {"lab_valid_account_access", "lab_fixed_python_execution"}
+L2_LAB_TARGET = "10.56.66.119"
+L2_LAB_PORT = 18080
+L2_LOGIN_PATH = "/lab/auth/login"
+L2_PROTECTED_PATH = "/lab/protected"
+L2_RESOURCE = "lab-only-protected-resource"
+L3_EXECUTE_PATH = "/lab/execute"
+L3_SCRIPT_ID = "gade-controlled-python-execution-v1"
+L3_SCRIPT_SHA256 = "b6d8391432ad8f0f993a51c2c35e13d86354f3d0220c3e1c71d69e82a5f164bb"
 SECURITY_HEADERS = (
     "strict-transport-security", "content-security-policy",
     "x-content-type-options", "x-frame-options", "referrer-policy",
@@ -121,6 +133,92 @@ def resolve_target(target: str) -> list[str]:
     if not addresses:
         raise ValueError("Target did not resolve to an IP address")
     return [str(address) for address in addresses]
+
+
+def worker_scope_configuration() -> tuple[bool, list[ipaddress.IPv4Network | ipaddress.IPv6Network]]:
+    """Return the optional worker-side CIDR guard; isolated profiles fail closed."""
+    profile = os.environ.get("KALI_WORKER_PROFILE", "shared").strip().lower()
+    enabled = os.environ.get("KALI_WORKER_ENFORCE_TARGET_SCOPE", "false").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    raw_scopes = os.environ.get("KALI_WORKER_ALLOWED_SCOPES", "")
+    scopes = [ipaddress.ip_network(item.strip(), strict=False)
+              for item in raw_scopes.split(",") if item.strip()]
+    if profile == "gade-experiment" and (not enabled or not scopes):
+        raise RuntimeError("isolated GADE Worker requires enabled, non-empty CIDR scope")
+    if enabled and not scopes:
+        raise RuntimeError("Worker target scope is enabled but no CIDRs are configured")
+    return enabled, scopes
+
+
+def effective_allowed_tools() -> set[str]:
+    """The experiment profile exposes only tools with formal GADE Action Contracts."""
+    if os.environ.get("KALI_WORKER_PROFILE", "shared").strip().lower() == "gade-experiment":
+        available = (ALLOWED_TOOLS | GADE_EXPERIMENT_ONLY_TOOLS) & PROTECTED_ACTION_TOOLS
+        if not nuclei_action_state()[0]:
+            available = available - {"nuclei_safe"}
+        return available
+    return ALLOWED_TOOLS
+
+
+def nuclei_action_state() -> tuple[bool, str | None]:
+    """Fail closed for the isolated Worker until a non-empty approved bundle is installed."""
+    if os.environ.get("KALI_WORKER_PROFILE", "shared").strip().lower() != "gade-experiment":
+        return True, None
+    if os.environ.get("GADE_NUCLEI_ACTION_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
+        return False, "nuclei.safe_scan.v1 unavailable: no approved template bundle is installed"
+
+    manifest_value = os.environ.get("GADE_NUCLEI_TEMPLATE_MANIFEST", "/opt/gade-build/approved-nuclei-templates.json")
+    templates_root = Path(os.environ.get("GADE_NUCLEI_TEMPLATES_DIR", "/opt/nuclei-templates"))
+    manifest_path = Path(manifest_value)
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        entries = manifest.get("templates")
+        if manifest.get("approval_status") != "APPROVED" or not isinstance(entries, list) or not entries:
+            return False, "nuclei.safe_scan.v1 unavailable: approved template manifest is missing or empty"
+        if (manifest.get("severity_selector") != "critical,high"
+                or manifest.get("selection_mode") != "complete-severity-selector"
+                or manifest.get("runtime_loaded_count") != len(entries)):
+            return False, "nuclei.safe_scan.v1 unavailable: approved manifest does not preserve the complete critical,high selector"
+        expected: set[str] = set()
+        for entry in entries:
+            relative = Path(str(entry["path"]))
+            if str(entry.get("severity", "")).lower() not in {"critical", "high"}:
+                return False, "nuclei.safe_scan.v1 unavailable: template severity is outside the fixed critical,high selector"
+            if relative.is_absolute() or ".." in relative.parts:
+                return False, "nuclei.safe_scan.v1 unavailable: unsafe template manifest path"
+            template_path = (templates_root / relative).resolve()
+            if templates_root.resolve() not in template_path.parents or not template_path.is_file():
+                return False, "nuclei.safe_scan.v1 unavailable: approved template file is missing"
+            if hashlib.sha256(template_path.read_bytes()).hexdigest() != str(entry.get("sha256", "")).lower():
+                return False, "nuclei.safe_scan.v1 unavailable: approved template hash mismatch"
+            expected.add(relative.as_posix())
+        actual = {path.relative_to(templates_root).as_posix() for path in templates_root.rglob("*")
+                  if path.is_file() and path.suffix.lower() in {".yaml", ".yml"}}
+        if actual != expected:
+            return False, "nuclei.safe_scan.v1 unavailable: installed template set differs from approved manifest"
+        return True, None
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return False, "nuclei.safe_scan.v1 unavailable: approved template manifest cannot be verified"
+
+
+def validate_worker_target_scope(addresses: list[str]) -> None:
+    enabled, scopes = worker_scope_configuration()
+    if not enabled:
+        return
+    parsed = [ipaddress.ip_address(address) for address in addresses]
+    if not parsed or any(not any(address in network for network in scopes) for address in parsed):
+        raise ValueError("target outside allowed Worker scope")
+
+
+def validate_worker_target_literal(target: str) -> None:
+    """Prevent an isolated Worker from sending hostnames to an external resolver."""
+    if os.environ.get("KALI_WORKER_PROFILE", "shared").strip().lower() != "gade-experiment":
+        return
+    try:
+        ipaddress.ip_address(target.strip())
+    except ValueError as exc:
+        raise ValueError("isolated profile accepts IP literals only") from exc
 
 
 def run_command(command: list[str]) -> dict[str, Any]:
@@ -220,6 +318,207 @@ def structured_result(tool: str, payload: dict[str, Any], *, success: bool = Tru
     }
 
 
+def run_lab_valid_account_access(req: ExecuteRequest) -> dict[str, Any]:
+    """Perform one fixed lab login and protected-resource check; never log secrets."""
+    params = req.authorization_parameters or {}
+    expected = canonical_action_parameters(
+        action_id="lab.valid_account_access.v1", target=req.target, port=req.port,
+        protocol=req.protocol, service=req.service,
+    )
+    if (req.tool != "lab_valid_account_access" or req.action_id != "lab.valid_account_access.v1"
+            or req.target != L2_LAB_TARGET or req.port != L2_LAB_PORT or params != expected
+            or params.get("login_path") != L2_LOGIN_PATH
+            or params.get("protected_path") != L2_PROTECTED_PATH):
+        return structured_result(req.tool, {"error": "fixed L2 Lab contract mismatch"}, success=False)
+
+    username = os.environ.get("GADE_L2_TEST_USERNAME", "")
+    password = os.environ.get("GADE_L2_TEST_PASSWORD", "")
+    if not username or len(password) < 24:
+        _log_execution_event("l2_handler_unavailable", reason="worker-local test credentials missing")
+        return structured_result(req.tool, {"error": "worker-local test credentials unavailable"}, success=False)
+
+    case_id = req.correlation_id or ""
+    if not case_id or len(case_id) > 96 or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:-" for ch in case_id):
+        return structured_result(req.tool, {"error": "invalid experiment correlation id"}, success=False)
+
+    connection = http.client.HTTPConnection(L2_LAB_TARGET, L2_LAB_PORT, timeout=8)
+    stage = "login"
+    token_value: str | None = None
+    try:
+        login_body = json.dumps({"username": username, "password": password}, separators=(",", ":"))
+        headers = {"Content-Type": "application/json", "X-Request-ID": req.request_id or "",
+                   "X-Test-Case-ID": case_id, "Connection": "close"}
+        _log_execution_event("l2_login_request_started", endpoint=L2_LOGIN_PATH,
+                             request_id=req.request_id, test_case_id=case_id)
+        connection.request("POST", L2_LOGIN_PATH, body=login_body, headers=headers)
+        login_response = connection.getresponse()
+        login_status = login_response.status
+        login_raw = login_response.read(8192)
+        if login_status != 200:
+            _log_execution_event("l2_login_rejected", status_code=login_status,
+                                 request_id=req.request_id, test_case_id=case_id)
+            return structured_result(req.tool, {"error": "lab login was rejected",
+                "login_http_status": login_status, "test_case_id": case_id}, success=False)
+        try:
+            login_data = json.loads(login_raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return structured_result(req.tool, {"error": "lab login returned invalid JSON",
+                "login_http_status": login_status, "test_case_id": case_id}, success=False)
+        token_value = login_data.get("session_token") if isinstance(login_data, dict) else None
+        ttl = login_data.get("expires_in") if isinstance(login_data, dict) else None
+        if (not isinstance(token_value, str) or len(token_value) < 32 or ttl != 60
+                or login_data.get("test_case_id") != case_id):
+            return structured_result(req.tool, {"error": "lab login response contract mismatch",
+                "login_http_status": login_status, "test_case_id": case_id}, success=False)
+        token_fingerprint = hashlib.sha256(token_value.encode("utf-8")).hexdigest()[:12]
+
+        stage = "protected_resource"
+        connection.close()
+
+
+        connection = http.client.HTTPConnection(L2_LAB_TARGET, L2_LAB_PORT, timeout=8)
+        protected_headers = {"Authorization": f"Bearer {token_value}",
+                             "X-Request-ID": req.request_id or "",
+                             "X-Test-Case-ID": case_id, "Connection": "close"}
+        _log_execution_event("l2_protected_request_started", endpoint=L2_PROTECTED_PATH,
+                             request_id=req.request_id, test_case_id=case_id,
+                             session_fingerprint=token_fingerprint)
+        connection.request("GET", L2_PROTECTED_PATH, headers=protected_headers)
+        protected_response = connection.getresponse()
+        protected_status = protected_response.status
+        protected_raw = protected_response.read(8192)
+        try:
+            protected_data = json.loads(protected_raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            protected_data = None
+        access_ok = (protected_status == 200 and isinstance(protected_data, dict)
+                     and protected_data.get("resource") == L2_RESOURCE
+                     and protected_data.get("scenario") == "T1078-test-account"
+                     and protected_data.get("access") == "granted"
+                     and protected_data.get("test_case_id") == case_id)
+        if not access_ok:
+            _log_execution_event("l2_protected_access_failed", status_code=protected_status,
+                                 request_id=req.request_id, test_case_id=case_id,
+                                 session_fingerprint=token_fingerprint)
+            return structured_result(req.tool, {"error": "protected resource verification failed",
+                "login_http_status": login_status, "protected_http_status": protected_status,
+                "session_ttl_seconds": ttl, "session_fingerprint": token_fingerprint,
+                "test_case_id": case_id}, success=False)
+
+        safe_result = {"success": True, "login_http_status": login_status,
+            "protected_http_status": protected_status, "session_ttl_seconds": ttl,
+            "session_fingerprint": token_fingerprint, "protected_resource": L2_RESOURCE,
+            "scenario": "T1078-test-account", "test_case_id": case_id}
+        _log_execution_event("l2_protected_access_verified", status_code=protected_status,
+                             request_id=req.request_id, test_case_id=case_id,
+                             session_fingerprint=token_fingerprint)
+        return structured_result(req.tool, safe_result)
+    except (OSError, http.client.HTTPException, TimeoutError) as exc:
+        _log_execution_event("l2_http_failure", stage=stage, error_type=type(exc).__name__,
+                             request_id=req.request_id, test_case_id=case_id)
+        return structured_result(req.tool, {"error": "fixed Lab HTTP exchange failed",
+            "failed_stage": stage, "error_type": type(exc).__name__, "test_case_id": case_id}, success=False)
+    finally:
+        token_value = None
+        connection.close()
+def run_lab_fixed_python_execution(req: ExecuteRequest) -> dict[str, Any]:
+    """Trigger only the target's pre-installed, session-gated L3 emulation."""
+    action_id = "lab.fixed_python_execution.v1"
+    params = req.authorization_parameters or {}
+    try:
+        expected = canonical_action_parameters(action_id=action_id, target=req.target,
+            port=req.port, protocol=req.protocol, service=req.service)
+    except ValueError:
+        expected = None
+    if (req.tool != "lab_fixed_python_execution" or req.action_id != action_id
+            or req.target != L2_LAB_TARGET or req.port != L2_LAB_PORT or params != expected
+            or params.get("execute_path") != L3_EXECUTE_PATH
+            or params.get("script_id") != L3_SCRIPT_ID or params.get("script_sha256") != L3_SCRIPT_SHA256):
+        return structured_result(req.tool, {"error": "fixed L3 Lab contract mismatch"}, success=False)
+    username = os.environ.get("GADE_L2_TEST_USERNAME", "")
+    password = os.environ.get("GADE_L2_TEST_PASSWORD", "")
+    if not username or len(password) < 24:
+        _log_execution_event("l3_handler_unavailable", reason="worker-local test credentials missing")
+        return structured_result(req.tool, {"error": "worker-local test credentials unavailable"}, success=False)
+    case_id = req.correlation_id or ""
+    pieces = case_id.split("-")
+    run_id = pieces[-1] if len(pieces) >= 4 and pieces[0:2] == ["GADE", "L3"] else ""
+    if (not run_id or len(run_id) != 12 or any(ch not in "0123456789abcdef" for ch in run_id)
+            or len(case_id) > 96 or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:-" for ch in case_id)):
+        return structured_result(req.tool, {"error": "invalid L3 run/correlation identity"}, success=False)
+    connection = http.client.HTTPConnection(L2_LAB_TARGET, L2_LAB_PORT, timeout=8)
+    stage = "login"
+    token_value: str | None = None
+    try:
+        login_body = json.dumps({"username": username, "password": password}, separators=(",", ":"))
+        headers = {"Content-Type": "application/json", "X-Request-ID": req.request_id or "",
+                   "X-Test-Case-ID": case_id, "X-Run-ID": run_id, "Connection": "close"}
+        _log_execution_event("l3_login_request_started", endpoint=L2_LOGIN_PATH,
+                             request_id=req.request_id, test_case_id=case_id)
+        connection.request("POST", L2_LOGIN_PATH, body=login_body, headers=headers)
+        login_response = connection.getresponse()
+        login_status = login_response.status
+        login_raw = login_response.read(8192)
+        if login_status != 200:
+            return structured_result(req.tool, {"error": "lab login was rejected",
+                "login_http_status": login_status, "test_case_id": case_id}, success=False)
+        try:
+            login_data = json.loads(login_raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            login_data = None
+        token_value = login_data.get("session_token") if isinstance(login_data, dict) else None
+        if (not isinstance(token_value, str) or len(token_value) < 32
+                or login_data.get("expires_in") != 60 or login_data.get("test_case_id") != case_id):
+            return structured_result(req.tool, {"error": "lab login response contract mismatch",
+                "login_http_status": login_status, "test_case_id": case_id}, success=False)
+        fingerprint = hashlib.sha256(token_value.encode("utf-8")).hexdigest()[:12]
+        stage = "fixed_python_execution"
+        connection.close()
+        connection = http.client.HTTPConnection(L2_LAB_TARGET, L2_LAB_PORT, timeout=12)
+        execute_headers = {"Authorization": f"Bearer {token_value}",
+            "Content-Type": "application/json", "X-Request-ID": req.request_id or "",
+            "X-Test-Case-ID": case_id, "X-Run-ID": run_id, "Connection": "close"}
+        _log_execution_event("l3_target_execution_request_started", endpoint=L3_EXECUTE_PATH,
+            request_id=req.request_id, test_case_id=case_id, script_id=L3_SCRIPT_ID,
+            script_sha256=L3_SCRIPT_SHA256, session_fingerprint=fingerprint)
+        connection.request("POST", L3_EXECUTE_PATH, body="{}", headers=execute_headers)
+        response = connection.getresponse()
+        status = response.status
+        raw = response.read(8192)
+        try:
+            body = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            body = None
+        success = (status == 200 and isinstance(body, dict) and body.get("status") == "completed"
+            and body.get("run_id") == run_id and body.get("test_case_id") == case_id
+            and body.get("request_id") == req.request_id and body.get("script_id") == L3_SCRIPT_ID
+            and body.get("script_sha256") == L3_SCRIPT_SHA256 and body.get("exit_status") == 0
+            and isinstance(body.get("marker_sha256"), str)
+            and len(body["marker_sha256"]) == 64)
+        if not success:
+            _log_execution_event("l3_target_execution_failed", status_code=status,
+                request_id=req.request_id, test_case_id=case_id, session_fingerprint=fingerprint)
+            return structured_result(req.tool, {"error": "fixed target-side execution verification failed",
+                "login_http_status": login_status, "execute_http_status": status,
+                "test_case_id": case_id, "response_sha256": _sha256_text(raw.decode("utf-8", "replace"))}, success=False)
+        _log_execution_event("l3_target_execution_verified", status_code=status,
+            request_id=req.request_id, test_case_id=case_id, script_id=L3_SCRIPT_ID,
+            marker_sha256=body["marker_sha256"], session_fingerprint=fingerprint)
+        return structured_result(req.tool, {"success": True, "login_http_status": login_status,
+            "execute_http_status": status, "run_id": run_id, "test_case_id": case_id,
+            "script_id": L3_SCRIPT_ID, "script_sha256": L3_SCRIPT_SHA256,
+            "process_exit_status": 0, "marker_sha256": body["marker_sha256"],
+            "session_fingerprint": fingerprint})
+    except (OSError, http.client.HTTPException, TimeoutError) as exc:
+        _log_execution_event("l3_http_failure", stage=stage, error_type=type(exc).__name__,
+            request_id=req.request_id, test_case_id=case_id)
+        return structured_result(req.tool, {"error": "fixed L3 Lab HTTP exchange failed",
+            "failed_stage": stage, "error_type": type(exc).__name__, "test_case_id": case_id}, success=False)
+    finally:
+        token_value = None
+        connection.close()
+
+
 def target_url(target: str, port: int | None, service: str | None = None) -> str:
     selected_port = port or 80
     service_name = (service or "").lower()
@@ -242,6 +541,9 @@ def run_httpx(target: str, port: int | None, service: str | None,
 
 
 def run_nuclei(target: str, port: int | None, service: str | None, canonical_url: str | None = None) -> dict[str, Any]:
+    available, reason = nuclei_action_state()
+    if not available:
+        raise RuntimeError(reason or "nuclei.safe_scan.v1 unavailable")
     return run_command([
         "nuclei", "-u", canonical_url or target_url(target, port, service), "-severity",
         "critical,high", "-rl", "5", "-timeout", "5", "-retries", "0", "-no-color",
@@ -361,12 +663,19 @@ def run_dns_metadata(target: str, scoped_addresses: list[str]) -> dict[str, Any]
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    scope_enabled, scopes = worker_scope_configuration()
+    nuclei_available, nuclei_reason = nuclei_action_state()
     return {
         "status": "ok", "version": app.version,
         "build_sha256": WORKER_BUILD_SHA256,
-        "allowed_tools": sorted(ALLOWED_TOOLS),
-        "scope_policy": "external_network_controls",
-        "scope_enforced_by_worker": False,
+        "registered_tools": sorted(((ALLOWED_TOOLS | GADE_EXPERIMENT_ONLY_TOOLS)
+                                     if os.environ.get("KALI_WORKER_PROFILE", "shared").strip().lower() == "gade-experiment"
+                                     else ALLOWED_TOOLS) & PROTECTED_ACTION_TOOLS),
+        "allowed_tools": sorted(effective_allowed_tools()),
+        "unavailable_actions": ([] if nuclei_available else [{"action_id": "nuclei.safe_scan.v1", "reason": nuclei_reason}]),
+        "scope_policy": "worker_enforced_cidr" if scope_enabled else "external_network_controls",
+        "scope_enforced_by_worker": scope_enabled,
+        "allowed_scopes": [str(scope) for scope in scopes],
     }
 
 
@@ -385,8 +694,20 @@ def execute(req: ExecuteRequest) -> dict[str, Any]:
         _log_execution_event("request_rejected", reason=reason)
         return {"status": "rejected", "reason": reason, "tool": req.tool}
 
-    if req.tool not in ALLOWED_TOOLS:
+    if req.tool == "nuclei_safe":
+        nuclei_available, nuclei_reason = nuclei_action_state()
+        if not nuclei_available:
+            _log_execution_event("action_unavailable", action_id="nuclei.safe_scan.v1", reason=nuclei_reason)
+            return {"status": "unavailable", "reason": nuclei_reason, "tool": req.tool,
+                    "action_id": "nuclei.safe_scan.v1"}
+
+    if req.tool not in effective_allowed_tools():
         return reject("tool not allowed")
+    if os.environ.get("KALI_WORKER_PROFILE", "shared").strip().lower() == "gade-experiment":
+        if (req.action_id is None or req.authorization_id is None or req.task_id is None
+                or not req.request_id or not req.correlation_id or not req.template_id
+                or not req.expected_worker_build_sha256):
+            return reject("isolated profile requires governed execution metadata")
     try:
         identity_error = validate_execution_identity(req)
     except (ValueError, TypeError) as exc:
@@ -409,12 +730,18 @@ def execute(req: ExecuteRequest) -> dict[str, Any]:
         if req.template_id != ACTION_TEMPLATES.get(req.action_id):
             return reject("template_id does not match action contract")
     try:
+        validate_worker_target_literal(req.target)
         addresses = resolve_target(req.target)
+        validate_worker_target_scope(addresses)
     except (OSError, ValueError) as exc:
+        return reject(str(exc))
+    except RuntimeError as exc:
         return reject(str(exc))
     authorized_url = (req.authorization_parameters or {}).get("canonical_url")
     authorized_sni = (req.authorization_parameters or {}).get("sni")
     handlers = {
+        "lab_valid_account_access": lambda: run_lab_valid_account_access(req),
+        "lab_fixed_python_execution": lambda: run_lab_fixed_python_execution(req),
         "nmap_service": lambda: run_nmap(req.target),
         "httpx_basic": lambda: run_httpx(req.target, req.port, req.service, authorized_url),
         "nuclei_safe": lambda: run_nuclei(req.target, req.port, req.service, authorized_url),

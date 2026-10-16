@@ -101,14 +101,17 @@ async def test_decision_engine_resolve_template_tool_failure_does_not_name_error
 def test_allowed_tool_sources_are_consistent(monkeypatch):
     from app.mitre_rules import ALLOWED_TOOLS
     from app.security.tool_policy import LLM_ALLOWED_TOOLS, resolve_template_tool
+    from app.tool_catalog import EXPERIMENT_ONLY_TOOLS
 
     monkeypatch.setattr(settings, "allowed_tools", default_allowed_tools_value())
 
-    assert LLM_ALLOWED_TOOLS == CANONICAL_ALLOWED_TOOLS
+    assert LLM_ALLOWED_TOOLS == CANONICAL_ALLOWED_TOOLS | EXPERIMENT_ONLY_TOOLS
     assert set(settings.allowed_tools_list) == set(CANONICAL_ALLOWED_TOOLS)
     assert ALLOWED_TOOLS == MITRE_ALLOWED_TOOL_IDS
     for tool in CANONICAL_ALLOWED_TOOLS:
         assert resolve_template_tool(tool) == tool
+    with pytest.raises(ValueError, match="not in ALLOWED_TOOLS"):
+        resolve_template_tool("lab_valid_account_access")
 
 
 def test_hostname_scope_allowlist_and_denylist(monkeypatch):

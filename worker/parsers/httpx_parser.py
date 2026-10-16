@@ -52,30 +52,6 @@ def parse_httpx_output(
     port: int | None = None,
 ) -> dict:
     raw_output = raw_output or ""
-    # Handle banner-only output case
-    if "projectdiscovery.io" in raw_output and "httpx" in raw_output.lower():
-        return stable_result(
-            tool_name="httpx",
-            success=success,
-            evidence_type="http_probe",
-            service="http",
-            port=port,
-            host=host,
-            raw_output=raw_output,
-            extra={
-                "parser_success": False,
-                "reason": "httpx banner only",
-                "services": [],
-                "urls": [],
-                "status_codes": [],
-                "titles": [],
-                "technologies": [],
-                "entry_count": 0,
-                "entries": [],
-                "parse_errors": [],
-            },
-        )
-
     # Handle the special HTTPX_OK case
     if raw_output.strip() == "HTTPX_OK":
         url = "http://192.0.2.22"
@@ -164,7 +140,11 @@ def parse_httpx_output(
     if not raw_output.strip():
         reason = "empty input"
     elif not parser_success:
-        reason = "no httpx services parsed"
+        reason = (
+            "httpx banner only"
+            if "projectdiscovery.io" in raw_output and "httpx" in raw_output.lower()
+            else "no httpx services parsed"
+        )
 
     return stable_result(
         tool_name="httpx",

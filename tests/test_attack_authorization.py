@@ -74,7 +74,7 @@ def test_exactly_seven_cumulative_levels_and_attck_tactics_are_defined():
     ]
     assert "not official linear" in "M2A cumulative authorization depth; not official linear MITRE ATT&CK phases."
     assert set(ACTION_REQUIRED_ATTACK_DEPTH) == set(ACTION_BY_TOOL.values())
-    assert set(ACTION_REQUIRED_ATTACK_DEPTH.values()) == {1}
+    assert set(ACTION_REQUIRED_ATTACK_DEPTH.values()) == {1, 2, 3}
 
 
 def test_level_definitions_api_is_backend_authoritative():
@@ -83,7 +83,9 @@ def test_level_definitions_api_is_backend_authoritative():
     body = response.json()
     assert len(body["levels"]) == 7
     assert body["levels"][0]["registered_actions"]
-    assert all(not item["registered_actions"] for item in body["levels"][1:])
+    assert body["levels"][1]["registered_actions"] == ["lab_valid_account_access"]
+    assert body["levels"][2]["registered_actions"] == ["lab_fixed_python_execution"]
+    assert all(not item["registered_actions"] for item in body["levels"][3:])
 
 
 @pytest.mark.parametrize(

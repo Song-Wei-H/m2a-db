@@ -5,6 +5,8 @@ from typing import Any
 
 
 ACTION_BY_TOOL = {
+    "lab_valid_account_access": "lab.valid_account_access.v1",
+    "lab_fixed_python_execution": "lab.fixed_python_execution.v1",
     "http_security_headers": "http_security_headers.collect.v1",
     "nuclei_safe": "nuclei.safe_scan.v1",
     "dns_metadata": "dns.metadata_collect.v1",
@@ -17,6 +19,8 @@ ACTION_BY_TOOL = {
 # M2A engagement-depth requirements are part of the immutable server-side
 # Action Contract. LLM proposals cannot provide or override these values.
 ACTION_REQUIRED_ATTACK_DEPTH = {
+    "lab.valid_account_access.v1": 2,  # fixed, lab-only valid-account login and protected-resource check
+    "lab.fixed_python_execution.v1": 3,  # fixed, session-bound target-side Python execution emulation
     "http_security_headers.collect.v1": 1,  # bounded HEAD-only configuration check
     "nuclei.safe_scan.v1": 1,  # fixed critical/high safe-scan contract
     "dns.metadata_collect.v1": 1,  # bounded DNS metadata collection
@@ -61,7 +65,17 @@ MYSQL_IDENTITY = (
     "argv:nmap:--script:mysql-info:-p:{port}:{target}:"
     "server-info-only:no-auth:timeout=180:nmap-default-retry:v2"
 )
+LAB_VALID_ACCOUNT_IDENTITY = (
+    "builtin:lab-valid-account-access:10.56.66.119:18080:"
+    "post-/lab/auth/login:get-/lab/protected:credentials=worker-env:ttl=60:v1"
+)
+LAB_FIXED_PYTHON_EXECUTION_IDENTITY = (
+    "builtin:lab-fixed-python:10.56.66.119:18080:"
+    "post-/lab/auth/login:post-/lab/execute:script=l3-fixed-python-v1:ttl=60:v1"
+)
 ACTION_IDENTITIES = {
+    "lab.valid_account_access.v1": LAB_VALID_ACCOUNT_IDENTITY,
+    "lab.fixed_python_execution.v1": LAB_FIXED_PYTHON_EXECUTION_IDENTITY,
     "http_security_headers.collect.v1": HEADER_IDENTITY,
     "nuclei.safe_scan.v1": NUCLEI_IDENTITY,
     "dns.metadata_collect.v1": DNS_IDENTITY,
@@ -72,6 +86,8 @@ ACTION_IDENTITIES = {
     "mysql.server_info.v1": MYSQL_IDENTITY,
 }
 ACTION_TEMPLATES = {
+    "lab.valid_account_access.v1": "lab_valid_account_access_v1",
+    "lab.fixed_python_execution.v1": "lab_fixed_python_execution_v1",
     "http_security_headers.collect.v1": "http_security_headers_v2",
     "nuclei.safe_scan.v1": "nuclei_safe_v2",
     "dns.metadata_collect.v1": "dns_metadata_v2",
@@ -80,6 +96,44 @@ ACTION_TEMPLATES = {
     "httpx.web_probe.v1": "httpx_web_probe_v2",
     "ssh.algorithms_enum.v1": "ssh_algorithms_enum_v2",
     "mysql.server_info.v1": "mysql_server_info_v2",
+}
+ACTION_PARAMETER_SCHEMAS = {
+    "lab.valid_account_access.v1": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "target", "host", "port", "protocol", "service", "login_method",
+            "login_path", "protected_method", "protected_path", "session_ttl_seconds",
+        ],
+        "properties": {
+            "target": {"const": "10.56.66.119"},
+            "host": {"const": "10.56.66.119"},
+            "port": {"const": 18080},
+            "protocol": {"const": "tcp"},
+            "service": {"const": "http"},
+            "login_method": {"const": "POST"},
+            "login_path": {"const": "/lab/auth/login"},
+            "protected_method": {"const": "GET"},
+            "protected_path": {"const": "/lab/protected"},
+            "session_ttl_seconds": {"const": 60},
+        },
+    },
+    "lab.fixed_python_execution.v1": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["target", "host", "port", "protocol", "service", "login_method",
+                     "login_path", "execute_method", "execute_path", "script_id",
+                     "script_sha256", "expected_result", "session_ttl_seconds"],
+        "properties": {
+            "target": {"const": "10.56.66.119"}, "host": {"const": "10.56.66.119"},
+            "port": {"const": 18080}, "protocol": {"const": "tcp"}, "service": {"const": "http"},
+            "login_method": {"const": "POST"}, "login_path": {"const": "/lab/auth/login"},
+            "execute_method": {"const": "POST"}, "execute_path": {"const": "/lab/execute"},
+            "script_id": {"const": "gade-controlled-python-execution-v1"},
+            "script_sha256": {"const": "b6d8391432ad8f0f993a51c2c35e13d86354f3d0220c3e1c71d69e82a5f164bb"},
+            "expected_result": {"const": 39}, "session_ttl_seconds": {"const": 60},
+        },
+    },
 }
 
 
@@ -105,6 +159,29 @@ def canonical_action_parameters(
 ) -> dict[str, Any]:
     if action_id not in TOOL_BY_ACTION:
         raise ValueError(f"Unknown migrated action {action_id!r}")
+    if action_id == "lab.valid_account_access.v1":
+        host = target.strip()
+        if host != "10.56.66.119" or port != 18080 or (protocol or "").lower() != "tcp" or (service or "").lower() != "http":
+            raise ValueError("L2 valid-account action is fixed to the authorized Lab HTTP endpoint")
+        return {
+            "target": host, "host": host, "port": 18080,
+            "protocol": "tcp", "service": "http",
+            "login_method": "POST", "login_path": "/lab/auth/login",
+            "protected_method": "GET", "protected_path": "/lab/protected",
+            "session_ttl_seconds": 60,
+        }
+    if action_id == "lab.fixed_python_execution.v1":
+        host = target.strip()
+        if host != "10.56.66.119" or port != 18080 or (protocol or "").lower() != "tcp" or (service or "").lower() != "http":
+            raise ValueError("L3 Python execution action is fixed to the authorized Lab HTTP endpoint")
+        return {
+            "target": host, "host": host, "port": 18080, "protocol": "tcp", "service": "http",
+            "login_method": "POST", "login_path": "/lab/auth/login",
+            "execute_method": "POST", "execute_path": "/lab/execute",
+            "script_id": "gade-controlled-python-execution-v1",
+            "script_sha256": "b6d8391432ad8f0f993a51c2c35e13d86354f3d0220c3e1c71d69e82a5f164bb",
+            "expected_result": 39, "session_ttl_seconds": 60,
+        }
     if action_id == "dns.metadata_collect.v1":
         host = target.strip()
         return {

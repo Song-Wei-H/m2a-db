@@ -14,7 +14,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from app.action_contracts import ACTION_REQUIRED_ATTACK_DEPTH
+from app.action_contracts import ACTION_BY_TOOL, ACTION_REQUIRED_ATTACK_DEPTH
 from app.attack_authorization import POLICY_VERSION, depth_decision
 from app.vulnerability_queue import TEST_FIXTURE_DEPTHS, evaluate_candidate
 
@@ -30,6 +30,17 @@ def digest(value: object) -> str:
 
 def file_digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def action_contract_depth_inventory() -> dict[str, int]:
+    """Return the live server-owned depth contract, rejecting incomplete drift."""
+    expected_actions = set(ACTION_BY_TOOL.values())
+    if not ACTION_REQUIRED_ATTACK_DEPTH or set(ACTION_REQUIRED_ATTACK_DEPTH) != expected_actions:
+        raise ValueError("Action Contract depth inventory does not cover the registered Action IDs")
+    if any(type(depth) is not int or not 1 <= depth <= 7
+           for depth in ACTION_REQUIRED_ATTACK_DEPTH.values()):
+        raise ValueError("Action Contract depths must be integer values in the GADE range 1..7")
+    return dict(sorted(ACTION_REQUIRED_ATTACK_DEPTH.items()))
 
 
 def git_text(*args: str) -> str:
@@ -183,7 +194,7 @@ def main() -> None:
     parser.add_argument("--output-dir", help="new output directory; existing paths are rejected")
     args = parser.parse_args()
 
-    assert set(ACTION_REQUIRED_ATTACK_DEPTH.values()) == {1}, "Production Action Registry depth inventory changed"
+    action_depths = action_contract_depth_inventory()
     assert TEST_FIXTURE_DEPTHS == {f"fixture.depth.{i}": i for i in range(1, 8)}
     dataset = load_dataset()
     matrix = build_matrix(dataset)
@@ -215,6 +226,7 @@ def main() -> None:
     dirty = bool(git_text("status", "--porcelain", "--untracked-files=all"))
     policy_path = ROOT / "app" / "attack_authorization.py"
     action_path = ROOT / "app" / "action_contracts.py"
+    formal_plan = json.loads((HERE / "formal-experiment-plan-v1.json").read_text(encoding="utf-8"))
     raw_results = {"dataset.json": dataset, "matrix-49.json": matrix,
                    "pilot-ab.json": ab, "negative-fixtures.json": negative}
     manifest = {
@@ -237,7 +249,13 @@ def main() -> None:
         "ab_pass": sum(bool(x["pass"]) for x in ab), "ab_total": len(ab),
         "ab_pairs": len({x["pair_id"] for x in ab}),
         "negative_pass": sum(bool(x["pass"]) for x in negative), "negative_total": len(negative),
-        "production_capability_ceiling": 1,
+        "production_action_depths": action_depths,
+        "production_capability_ceiling": max(action_depths.values()),
+        "formal_plan_capability_ceiling": formal_plan.get("production_capability_ceiling"),
+        "formal_plan_capability_alignment": (
+            "ALIGNED" if max(action_depths.values()) == formal_plan.get("production_capability_ceiling")
+            else "DRIFT_REVIEW_REQUIRED"
+        ),
         "D_actual": "NOT_MEASURED_NO_EXECUTION",
         "unauthorized_execution_count": "NOT_MEASURED_NO_EXECUTION",
         "durable_execution_trace": "NOT_MEASURED_NO_RUNTIME_EXECUTION",

@@ -21,8 +21,13 @@ def test_batch0_contract_has_versioned_unique_template_and_execution_identity():
     assert set(ACTION_IDENTITIES) == set(ACTION_TEMPLATES)
     assert len(set(ACTION_IDENTITIES.values())) == len(ACTION_IDENTITIES)
     assert len(set(ACTION_TEMPLATES.values())) == len(ACTION_TEMPLATES)
-    assert all(value.endswith("v2") for value in ACTION_IDENTITIES.values())
-    assert all(value.endswith("_v2") for value in ACTION_TEMPLATES.values())
+    phase3_action_ids = {action_id for action_id in ACTION_IDENTITIES if not action_id.startswith("lab.")}
+    lab_action_ids = set(ACTION_IDENTITIES) - phase3_action_ids
+    assert phase3_action_ids
+    assert all(ACTION_IDENTITIES[action_id].endswith("v2") for action_id in phase3_action_ids)
+    assert all(ACTION_TEMPLATES[action_id].endswith("_v2") for action_id in phase3_action_ids)
+    assert all(ACTION_IDENTITIES[action_id].endswith("v1") for action_id in lab_action_ids)
+    assert all(ACTION_TEMPLATES[action_id].endswith("_v1") for action_id in lab_action_ids)
 
 
 def test_header_tool_only_request_fails_closed(monkeypatch):

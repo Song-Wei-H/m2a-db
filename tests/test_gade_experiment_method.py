@@ -117,6 +117,12 @@ def test_pilot_writes_immutable_new_run_and_keeps_historical_outputs_unchanged()
     assert result.returncode == 0, result.stderr
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     rows = json.loads((output / "pilot-ab.json").read_text(encoding="utf-8"))
+    from app.action_contracts import ACTION_BY_TOOL, ACTION_REQUIRED_ATTACK_DEPTH
+    assert manifest["production_action_depths"] == dict(sorted(ACTION_REQUIRED_ATTACK_DEPTH.items()))
+    assert set(manifest["production_action_depths"]) == set(ACTION_BY_TOOL.values())
+    assert manifest["production_capability_ceiling"] == max(ACTION_REQUIRED_ATTACK_DEPTH.values())
+    assert manifest["formal_plan_capability_ceiling"] == 1
+    assert manifest["formal_plan_capability_alignment"] == "DRIFT_REVIEW_REQUIRED"
     assert manifest["ab_pass"] == manifest["ab_total"] == 22
     assert manifest["ab_pairs"] == 11
     dirty = bool(subprocess.check_output(
