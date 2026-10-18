@@ -35,3 +35,20 @@ def test_nuclei_parser_empty_input():
 
     assert parsed["parser_success"] is False
     assert parsed["reason"] == "empty input"
+
+
+def test_nuclei_parser_explicit_completed_no_finding_is_not_an_error():
+    raw = "[INF] Templates loaded for current scan: 1\n[INF] Targets loaded for current scan: 1\n[INF] Scan completed in 11ms. No results found."
+    parsed = parse_nuclei_output(raw, success=True, host="127.0.0.1", port=18080)
+    assert parsed["parser_success"] is True
+    assert parsed["scan_outcome"] == "NO_FINDING"
+    assert parsed["finding_count"] == 0
+
+
+def test_nuclei_parser_timeout_and_error_are_not_no_finding():
+    timed_out = parse_nuclei_output("command timeout", success=False)
+    failed = parse_nuclei_output("process failed", success=False)
+    assert timed_out["scan_outcome"] == "TIMEOUT"
+    assert failed["scan_outcome"] == "ERROR"
+    assert timed_out["parser_success"] is False
+    assert failed["parser_success"] is False

@@ -7,8 +7,11 @@ operations, or command generation.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 from urllib.parse import urlparse
+
+from app.action_contracts import HOME_ADVANCED_ACTIONS
 
 Evidence = dict[str, Any]
 
@@ -149,10 +152,44 @@ def _nuclei_normalize(
         findings = []
     if not findings and int(parsed_output.get("finding_count") or 0) > 0:
         findings = [parsed_output]
+    if (not findings and parsed_output.get("success") is True
+            and getattr(ctx, "host", None) == "127.0.0.1"
+            and getattr(ctx, "port", None) == 18080):
+        evidence = _base_evidence(
+            tool_name="nuclei_safe", evidence_type="scan_no_finding_observed",
+            raw_output=raw_output, ctx=ctx, tool_result_id=tool_result_id,
+            confidence=0.5,
+        )
+        evidence["details"].update({
+            "finding_count": 0,
+            "interpretation": "No finding in this bounded scan; not proof that the target is vulnerability-free",
+            "approved_template_execution": "SEPARATE_RECEIPT_AND_ACTION_CONTRACT_REQUIRED",
+        })
+        return [evidence]
     for finding in findings:
         if not isinstance(finding, dict):
             continue
         severity = str(finding.get("severity") or "unknown").lower()
+        template_id = finding.get("id") or finding.get("template_id")
+        if template_id == "gade-home-exposed-backup-index":
+            if (finding.get("url") != "http://127.0.0.1:18080/backup/"
+                    or severity != "high" or finding.get("cve_ids")):
+                raise ValueError("synthetic backup fixture finding differs from the approved contract")
+            evidence = _base_evidence(
+                tool_name="nuclei_safe", evidence_type="synthetic_configuration_candidate",
+                raw_output=raw_output, ctx=ctx, tool_result_id=tool_result_id,
+                confidence=0.6,
+            )
+            evidence["details"].update({
+                "template_id": template_id,
+                "benchmark_severity_label": "high",
+                "configuration_issue": "directory index enabled for synthetic /backup/ fixture",
+                "cve": None,
+                "real_world_impact": "NOT_ESTABLISHED",
+                "target_side_independent_verification": "SEPARATE_TARGET_EVIDENCE_REQUIRED",
+            })
+            evidence_list.append(evidence)
+            continue
         evidence = _base_evidence(
             tool_name="nuclei_safe",
             evidence_type="vulnerability",
@@ -377,6 +414,123 @@ def _remote_evidence_normalize(
     return [evidence]
 
 
+def _fixed_lab_action_normalize(
+    tool_name: str,
+    parsed_output: dict[str, Any],
+    raw_output: str,
+    ctx: Any | None,
+    tool_result_id: int | None,
+) -> list[Evidence]:
+    """Project only reviewed synthetic L2/L3/L4 fields; never expose session data."""
+    if parsed_output.get("success") is not True or parsed_output.get("status") != "done":
+        raise ValueError("synthetic lab action did not report successful completion")
+    case = parsed_output.get("test_case_id")
+    if not isinstance(case, str) or not case.startswith(("GADE-L3-MULTI-", "GADE-L4-")):
+        raise ValueError("synthetic lab action has no bounded case identity")
+    if tool_name == "lab_valid_account_access":
+        if (parsed_output.get("login_http_status") != 200
+                or parsed_output.get("protected_http_status") != 200
+                or parsed_output.get("protected_resource") != "lab-only-protected-resource"):
+            raise ValueError("synthetic protected-resource access was not verified")
+        evidence_type = "synthetic_valid_account_access"
+        details = {
+            "login_http_status": 200,
+            "protected_http_status": 200,
+            "protected_resource": "lab-only-protected-resource",
+            "interpretation": "fixed test-account access, not a vulnerability or exploit",
+            "mitre_attack_technique": "T1078",
+        }
+    elif tool_name == "lab_fixed_python_execution":
+        script_sha = parsed_output.get("script_sha256")
+        marker_sha = parsed_output.get("marker_sha256")
+        if (parsed_output.get("login_http_status") != 200
+                or parsed_output.get("execute_http_status") != 200
+                or parsed_output.get("process_exit_status") != 0
+                or parsed_output.get("script_id") != "gade-controlled-python-execution-v1"
+                or not isinstance(script_sha, str) or len(script_sha) != 64
+                or not isinstance(marker_sha, str) or len(marker_sha) != 64):
+            raise ValueError("fixed synthetic execution proof is incomplete")
+        evidence_type = "synthetic_fixed_python_execution"
+        details = {
+            "script_id": parsed_output["script_id"],
+            "script_sha256": script_sha,
+            "marker_sha256": marker_sha,
+            "process_exit_status": 0,
+            "interpretation": "fixed non-destructive lab script, not arbitrary code execution",
+            "mitre_attack_technique": "T1059.006",
+        }
+    elif tool_name == "lab_synthetic_role_lease":
+        state_sha = parsed_output.get("state_sha256")
+        if (not case.startswith(("GADE-L4-", "GADE-L3-MULTI-A-R"))
+                or parsed_output.get("lease_http_status") != 200
+                or parsed_output.get("protected_http_status") != 200
+                or parsed_output.get("role") != "synthetic-lab-operator"
+                or parsed_output.get("lease_ttl_seconds") != 300
+                or parsed_output.get("simulation") is not True
+                or not isinstance(state_sha, str) or len(state_sha) != 64
+                or any(ch not in "0123456789abcdef" for ch in state_sha)):
+            raise ValueError("synthetic role lease proof is incomplete")
+        evidence_type = "synthetic_role_lease"
+        details = {
+            "state_sha256": state_sha,
+            "role": "synthetic-lab-operator",
+            "lease_ttl_seconds": 300,
+            "protected_http_status": 200,
+            "interpretation": "reversible application-level role change, not OS privilege escalation",
+            "mitre_attack_technique_analogy": "T1098",
+        }
+    elif tool_name in HOME_ADVANCED_ACTIONS:
+        action_id, depth, fixed_path = HOME_ADVANCED_ACTIONS[tool_name]
+        state_sha = parsed_output.get("state_sha256")
+        effect = parsed_output.get("effect")
+        if (not case.startswith("GADE-L3-MULTI-A-R")
+                or parsed_output.get("action") != fixed_path
+                or parsed_output.get("action_http_status") != 200
+                or parsed_output.get("simulation") is not True
+                or not isinstance(state_sha, str) or len(state_sha) != 64
+                or any(ch not in "0123456789abcdef" for ch in state_sha)
+                or not isinstance(effect, dict)):
+            raise ValueError("advanced synthetic state proof is incomplete")
+        reviewed_effect = {
+            "l5-canary": {"canary_id": "LAB-CANARY-NONSECRET-01"},
+            "l5-visibility": {"control_simulation": "degraded_visibility", "real_security_controls_changed": False},
+            "l6-discovery": {"node_ids": ["node-alpha", "node-beta"]},
+            "l6-session": {"source_node": "node-alpha", "destination_node": "node-beta"},
+            "l7-collection": {"record_ids": ["SYNTHETIC-RECORD-1", "SYNTHETIC-RECORD-2"]},
+            "l7-c2": {"message": "LAB-NOOP", "ack": "LAB-NOOP-ACK"},
+            "l7-impact": {"impact_mode": "simulated_interruption", "real_service_interrupted": False},
+        }
+        if fixed_path == "l7-transfer":
+            valid_effect = (effect.get("receiver_id") == "lab-receiver-fixed"
+                            and effect.get("external_network_used") is False
+                            and isinstance(effect.get("payload_sha256"), str)
+                            and len(effect["payload_sha256"]) == 64
+                            and all(ch in "0123456789abcdef" for ch in effect["payload_sha256"])
+                            and set(effect) == {"receiver_id", "external_network_used", "payload_sha256"})
+        else:
+            valid_effect = effect == reviewed_effect[fixed_path]
+        if not valid_effect:
+            raise ValueError("advanced synthetic effect differs from fixed Action Contract")
+        evidence_type = "synthetic_advanced_effect"
+        details = {"action_id": action_id, "required_depth": depth,
+                   "fixed_effect": effect, "state_sha256": state_sha,
+                   "interpretation": "bounded synthetic lab state only; not a real attack capability"}
+    else:
+        raise ValueError("unknown synthetic lab action")
+    evidence = _base_evidence(
+        tool_name=tool_name, evidence_type=evidence_type,
+        raw_output=raw_output, ctx=ctx, tool_result_id=tool_result_id,
+        confidence=0.85,
+    )
+    evidence["details"] = {
+        **details,
+        "test_case_id": case,
+        "worker_raw_output_sha256": hashlib.sha256(raw_output.encode("utf-8")).hexdigest(),
+        "target_side_independent_verification": "NOT_INCLUDED_IN_WORKER_NORMALIZATION",
+    }
+    return [evidence]
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -408,6 +562,8 @@ def normalize_tool_result(
         return _mysql_info_normalize(parsed_output, raw_output, ctx, tool_result_id)
     if tool_name in {"tls_certificate", "http_security_headers", "dns_metadata"}:
         return _remote_evidence_normalize(tool_name, parsed_output, raw_output, ctx, tool_result_id)
+    if tool_name in {"lab_valid_account_access", "lab_fixed_python_execution", "lab_synthetic_role_lease"} | set(HOME_ADVANCED_ACTIONS):
+        return _fixed_lab_action_normalize(tool_name, parsed_output, raw_output, ctx, tool_result_id)
     return _generic_normalize(
         tool_name,
         parsed_output,

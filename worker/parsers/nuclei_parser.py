@@ -105,7 +105,20 @@ def parse_nuclei_output(
             else:
                 parse_errors.append(line[:200])
 
-    parser_success = bool(findings)
+    # A completed Nuclei scan with an explicit zero-result summary is a
+    # parseable negative result, not a parser failure. The Worker receipt must
+    # independently prove exit 0 before callers treat this as NO_FINDING.
+    no_result_summary = any(
+        "Scan completed" in line and "No results found" in line
+        for line in raw_output.splitlines()
+    )
+    parser_success = bool(findings) or (success and no_result_summary)
+    scan_outcome = (
+        "FINDING" if findings and success else
+        "NO_FINDING" if success and no_result_summary else
+        "TIMEOUT" if not success and "timeout" in raw_output.lower() else
+        "ERROR" if not success else "UNKNOWN"
+    )
     reason = None
     if not raw_output.strip():
         reason = "empty input"
@@ -124,6 +137,7 @@ def parse_nuclei_output(
         raw_output=raw_output,
         extra={
             "parser_success": parser_success,
+            "scan_outcome": scan_outcome,
             "reason": reason,
             "parse_errors": parse_errors[:20],
             "finding_count": len(findings),

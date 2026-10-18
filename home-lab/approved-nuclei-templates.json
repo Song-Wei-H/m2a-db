@@ -1,0 +1,16 @@
+{
+  "approval_status": "APPROVED",
+  "approval_scope": "HOME_LAB_EXPLORATORY_B_ENGINEERING_ONLY",
+  "approved_by": "user",
+  "severity_selector": "critical,high",
+  "selection_mode": "complete-severity-selector",
+  "runtime_loaded_count": 1,
+  "templates": [
+    {
+      "path": "gade-home-exposed-backup-index.yaml",
+      "severity": "high",
+      "sha256": "7454a7f7f5d4ae47a140021d4e6754e56abe0f737ee514637c3a42c03f86320f"
+    }
+  ],
+  "interpretation": "Synthetic backup-directory listing fixture only; high is a template benchmark label, not a confirmed CVE or real-world impact rating."
+}

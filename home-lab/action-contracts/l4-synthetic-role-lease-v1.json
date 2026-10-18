@@ -1,0 +1,41 @@
+{
+  "action_id": "lab.synthetic_role_lease.v1",
+  "tool_name": "lab_synthetic_role_lease",
+  "required_depth": 4,
+  "mitre_analogy": ["T1098 Account Manipulation"],
+  "target_identity": "gade-l2-t1078",
+  "target": "127.0.0.1:18080",
+  "scope": "127.0.0.1/32",
+  "request": {
+    "method": "POST",
+    "path": "/lab/l4/role-lease",
+    "body": {},
+    "run_id_header_required": true,
+    "authenticated_test_session_required": true
+  },
+  "effect": {
+    "kind": "synthetic_reversible_role_lease",
+    "principal": "fixed_lab_test_account",
+    "role": "synthetic-lab-operator",
+    "ttl_seconds": 300,
+    "state_file": "synthetic-role-lease.json",
+    "protected_resource": "/lab/l4/protected"
+  },
+  "governance": {
+    "individual_human_approval_required": true,
+    "gade_authorization_required": true,
+    "execution_authorization_required": true,
+    "grant_execution_limit": 1,
+    "grant_ttl_seconds_max": 60,
+    "target_scope_fail_closed": true
+  },
+  "target_side_evidence": {
+    "inspection_path": "/lab/admin/l4-evidence",
+    "event_types": ["l4_synthetic_persistence_created", "l4_test_role_granted"],
+    "correlation_fields": ["run_id", "test_case_id", "request_id", "state_sha256"]
+  },
+  "blue_team_rule_id": "GADE-LAB-L4-SYNTHETIC-ROLE-LEASE-V1",
+  "reset_path": "/lab/admin/reset",
+  "safety": "Synthetic lab application state only; no OS account, startup persistence, or real privilege change.",
+  "status": "TARGET_AND_OFFLINE_RULE_TESTED_WORKER_GADE_NOT_YET_ENABLED"
+}

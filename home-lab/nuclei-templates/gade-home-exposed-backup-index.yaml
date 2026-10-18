@@ -1,0 +1,29 @@
+id: gade-home-exposed-backup-index
+
+info:
+  name: GADE Home Lab Synthetic Backup Directory Listing
+  author: m2a-home-lab
+  severity: high
+  description: >-
+    Detects the intentionally exposed, non-secret backup directory listing in
+    the isolated GADE home lab. The severity is a benchmark label, not a claim
+    of a real CVE or sensitive-data exposure.
+  tags: gade,home-lab,misconfiguration
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/backup/"
+    redirects: false
+    max-redirects: 0
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        condition: and
+        words:
+          - "Index of /backup/"
+          - "README.txt"

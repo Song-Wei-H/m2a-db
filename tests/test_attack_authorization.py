@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from app.action_contracts import ACTION_BY_TOOL, ACTION_IDENTITIES, ACTION_REQUIRED_ATTACK_DEPTH, ACTION_TEMPLATES, canonical_action_parameters
+from app.action_contracts import ACTION_BY_TOOL, ACTION_IDENTITIES, ACTION_REQUIRED_ATTACK_DEPTH, ACTION_TEMPLATES, HOME_LAB_EXPLORATORY, HOME_ADVANCED_ACTIONS, canonical_action_parameters
 from app.attack_authorization import ATTACK_AUTHORIZATION_LEVELS, depth_decision, level_definitions
 from app.api.targets import update_target_authorization
 from app.execution_governance import evaluate_and_authorize
@@ -74,7 +74,7 @@ def test_exactly_seven_cumulative_levels_and_attck_tactics_are_defined():
     ]
     assert "not official linear" in "M2A cumulative authorization depth; not official linear MITRE ATT&CK phases."
     assert set(ACTION_REQUIRED_ATTACK_DEPTH) == set(ACTION_BY_TOOL.values())
-    assert set(ACTION_REQUIRED_ATTACK_DEPTH.values()) == {1, 2, 3}
+    assert set(ACTION_REQUIRED_ATTACK_DEPTH.values()) == ({1, 2, 3, 4, 5, 6, 7} if HOME_LAB_EXPLORATORY else {1, 2, 3, 4})
 
 
 def test_level_definitions_api_is_backend_authoritative():
@@ -85,7 +85,15 @@ def test_level_definitions_api_is_backend_authoritative():
     assert body["levels"][0]["registered_actions"]
     assert body["levels"][1]["registered_actions"] == ["lab_valid_account_access"]
     assert body["levels"][2]["registered_actions"] == ["lab_fixed_python_execution"]
-    assert all(not item["registered_actions"] for item in body["levels"][3:])
+    assert body["levels"][3]["registered_actions"] == ["lab_synthetic_role_lease"]
+    if HOME_LAB_EXPLORATORY:
+        for depth in (5, 6, 7):
+            assert set(body["levels"][depth - 1]["registered_actions"]) == {
+                tool for tool, (_, registered_depth, _) in HOME_ADVANCED_ACTIONS.items()
+                if registered_depth == depth
+            }
+    else:
+        assert all(not item["registered_actions"] for item in body["levels"][4:])
 
 
 @pytest.mark.parametrize(

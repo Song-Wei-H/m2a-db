@@ -1,0 +1,5 @@
+services:
+  target:
+    volumes:
+      - ./nginx-normal.conf:/etc/nginx/mode-b-target.conf:ro
+      - ../lab/mode-b-target/www:/usr/share/nginx/mode-b-target:ro

@@ -20,6 +20,10 @@ from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict
 from app.action_contracts import (
     ACTION_IDENTITIES, ACTION_BY_TOOL, ACTION_TEMPLATES, canonical_action_parameters, PROTECTED_ACTION_TOOLS,
+    LAB_TARGET, LAB_PORT, HOME_LAB_EXPLORATORY, HOME_NUCLEI_TEMPLATE_PATH,
+    HOME_NUCLEI_TEMPLATE_SHA256,
+    HOME_ADVANCED_ACTIONS,
+    nuclei_fixed_argv,
 )
 
 app = FastAPI(title="M2A Kali Worker", version="evidence-tools-v1")
@@ -35,9 +39,11 @@ ALLOWED_TOOLS = {
 }
 # This action is visible only through the dedicated GADE experiment profile.
 # It is deliberately excluded from the shared Worker profile's allowlist.
-GADE_EXPERIMENT_ONLY_TOOLS = {"lab_valid_account_access", "lab_fixed_python_execution"}
-L2_LAB_TARGET = "10.56.66.119"
-L2_LAB_PORT = 18080
+GADE_EXPERIMENT_ONLY_TOOLS = {"lab_valid_account_access", "lab_fixed_python_execution", "lab_synthetic_role_lease"}
+if HOME_LAB_EXPLORATORY:
+    GADE_EXPERIMENT_ONLY_TOOLS.update(HOME_ADVANCED_ACTIONS)
+L2_LAB_TARGET = LAB_TARGET
+L2_LAB_PORT = LAB_PORT
 L2_LOGIN_PATH = "/lab/auth/login"
 L2_PROTECTED_PATH = "/lab/protected"
 L2_RESOURCE = "lab-only-protected-resource"
@@ -157,6 +163,10 @@ def effective_allowed_tools() -> set[str]:
         available = (ALLOWED_TOOLS | GADE_EXPERIMENT_ONLY_TOOLS) & PROTECTED_ACTION_TOOLS
         if not nuclei_action_state()[0]:
             available = available - {"nuclei_safe"}
+        if not (HOME_LAB_EXPLORATORY and os.environ.get("GADE_L4_SYNTHETIC_ENABLED") == "1"):
+            available.discard("lab_synthetic_role_lease")
+        if not (HOME_LAB_EXPLORATORY and os.environ.get("GADE_ADVANCED_SYNTHETIC_ENABLED") == "1"):
+            available.difference_update(HOME_ADVANCED_ACTIONS)
         return available
     return ALLOWED_TOOLS
 
@@ -170,6 +180,8 @@ def nuclei_action_state() -> tuple[bool, str | None]:
 
     manifest_value = os.environ.get("GADE_NUCLEI_TEMPLATE_MANIFEST", "/opt/gade-build/approved-nuclei-templates.json")
     templates_root = Path(os.environ.get("GADE_NUCLEI_TEMPLATES_DIR", "/opt/nuclei-templates"))
+    if HOME_LAB_EXPLORATORY and templates_root.resolve() != Path(HOME_NUCLEI_TEMPLATE_PATH).parent:
+        return False, "nuclei.safe_scan.v1 unavailable: home template directory differs from Action Contract"
     manifest_path = Path(manifest_value)
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -192,11 +204,15 @@ def nuclei_action_state() -> tuple[bool, str | None]:
                 return False, "nuclei.safe_scan.v1 unavailable: approved template file is missing"
             if hashlib.sha256(template_path.read_bytes()).hexdigest() != str(entry.get("sha256", "")).lower():
                 return False, "nuclei.safe_scan.v1 unavailable: approved template hash mismatch"
+            if HOME_LAB_EXPLORATORY and str(entry.get("sha256", "")).lower() != HOME_NUCLEI_TEMPLATE_SHA256:
+                return False, "nuclei.safe_scan.v1 unavailable: template hash differs from Action Contract"
             expected.add(relative.as_posix())
         actual = {path.relative_to(templates_root).as_posix() for path in templates_root.rglob("*")
                   if path.is_file() and path.suffix.lower() in {".yaml", ".yml"}}
         if actual != expected:
             return False, "nuclei.safe_scan.v1 unavailable: installed template set differs from approved manifest"
+        if HOME_LAB_EXPLORATORY and expected != {Path(HOME_NUCLEI_TEMPLATE_PATH).name}:
+            return False, "nuclei.safe_scan.v1 unavailable: home template differs from Action Contract"
         return True, None
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return False, "nuclei.safe_scan.v1 unavailable: approved template manifest cannot be verified"
@@ -232,7 +248,7 @@ def run_command(command: list[str]) -> dict[str, Any]:
     process = None
     try:
         process = subprocess.Popen(
-            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             shell=False,
         )
         process_started_at = _utc_now()
@@ -474,6 +490,8 @@ def run_lab_fixed_python_execution(req: ExecuteRequest) -> dict[str, Any]:
         fingerprint = hashlib.sha256(token_value.encode("utf-8")).hexdigest()[:12]
         stage = "fixed_python_execution"
         connection.close()
+
+
         connection = http.client.HTTPConnection(L2_LAB_TARGET, L2_LAB_PORT, timeout=12)
         execute_headers = {"Authorization": f"Bearer {token_value}",
             "Content-Type": "application/json", "X-Request-ID": req.request_id or "",
@@ -519,6 +537,164 @@ def run_lab_fixed_python_execution(req: ExecuteRequest) -> dict[str, Any]:
         connection.close()
 
 
+def run_lab_synthetic_role_lease(req: ExecuteRequest) -> dict[str, Any]:
+    """Create only the approved synthetic role lease and verify its fixed resource."""
+    action_id = "lab.synthetic_role_lease.v1"
+    try:
+        expected = canonical_action_parameters(action_id=action_id, target=req.target,
+            port=req.port, protocol=req.protocol, service=req.service)
+    except ValueError:
+        expected = None
+    if (os.environ.get("GADE_L4_SYNTHETIC_ENABLED") != "1"
+            or req.tool != "lab_synthetic_role_lease" or req.action_id != action_id
+            or req.authorization_parameters != expected):
+        return structured_result(req.tool, {"error": "fixed L4 Lab contract mismatch"}, success=False)
+    username = os.environ.get("GADE_L2_TEST_USERNAME", "")
+    password = os.environ.get("GADE_L2_TEST_PASSWORD", "")
+    case_id = req.correlation_id or ""
+    pieces = case_id.split("-")
+    reviewed_case = (case_id.startswith("GADE-L3-MULTI-A-R")
+                     or case_id.startswith("GADE-L4-ENGINEERING-"))
+    run_id = pieces[-1] if reviewed_case else ""
+    if (not username or len(password) < 24 or not run_id or len(run_id) != 12
+            or any(ch not in "0123456789abcdef" for ch in run_id)
+            or len(case_id) > 96 or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:-" for ch in case_id)):
+        return structured_result(req.tool, {"error": "L4 credentials or correlation identity unavailable"}, success=False)
+    headers = {"X-Request-ID": req.request_id or "", "X-Test-Case-ID": case_id,
+               "X-Run-ID": run_id, "Connection": "close"}
+    stage = "login"
+    connection = http.client.HTTPConnection("127.0.0.1", 18080, timeout=8)
+    token_value: str | None = None
+    try:
+        connection.request("POST", "/lab/auth/login",
+            body=json.dumps({"username": username, "password": password}, separators=(",", ":")),
+            headers={**headers, "Content-Type": "application/json"})
+        response = connection.getresponse()
+        body = json.loads(response.read(8192))
+        if (response.status != 200 or not isinstance(body, dict)
+                or body.get("expires_in") != 60 or body.get("test_case_id") != case_id
+                or not isinstance(body.get("session_token"), str)
+                or len(body["session_token"]) < 32):
+            raise ValueError("fixed test-account login failed")
+        token_value = body["session_token"]
+        connection.close()
+
+
+        stage = "role_lease"
+        connection = http.client.HTTPConnection("127.0.0.1", 18080, timeout=8)
+        connection.request("POST", "/lab/l4/role-lease", body="{}",
+            headers={**headers, "Content-Type": "application/json",
+                     "Authorization": f"Bearer {token_value}"})
+        response = connection.getresponse()
+        lease = json.loads(response.read(8192))
+        if (response.status != 200 or not isinstance(lease, dict)
+                or lease.get("outcome") != "completed" or lease.get("run_id") != run_id
+                or lease.get("test_case_id") != case_id or lease.get("request_id") != req.request_id
+                or lease.get("role") != "synthetic-lab-operator"
+                or lease.get("ttl_seconds") != 300 or lease.get("simulation") is not True
+                or not isinstance(lease.get("state_sha256"), str)
+                or len(lease["state_sha256"]) != 64):
+            raise ValueError("synthetic role lease proof mismatch")
+        connection.close()
+        stage = "protected_resource"
+        connection = http.client.HTTPConnection("127.0.0.1", 18080, timeout=8)
+        connection.request("GET", "/lab/l4/protected",
+            headers={**headers, "Authorization": f"Bearer {token_value}"})
+        response = connection.getresponse()
+        resource = json.loads(response.read(8192))
+        if (response.status != 200 or not isinstance(resource, dict)
+                or resource.get("resource") != "lab-only-l4-role-resource"
+                or resource.get("role") != "synthetic-lab-operator"
+                or resource.get("simulation") is not True):
+            raise ValueError("synthetic role did not change protected-resource access")
+        return structured_result(req.tool, {"success": True, "run_id": run_id,
+            "test_case_id": case_id, "request_id": req.request_id,
+            "lease_http_status": 200, "protected_http_status": 200,
+            "role": "synthetic-lab-operator", "lease_ttl_seconds": 300,
+            "state_sha256": lease["state_sha256"], "simulation": True})
+    except (OSError, http.client.HTTPException, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+        _log_execution_event("l4_fixed_action_failed", stage=stage,
+                             error_type=type(exc).__name__, request_id=req.request_id,
+                             test_case_id=case_id)
+        return structured_result(req.tool, {"error": "fixed L4 Lab exchange failed",
+            "failed_stage": stage, "error_type": type(exc).__name__, "test_case_id": case_id}, success=False)
+    finally:
+        token_value = None
+        connection.close()
+
+def run_lab_advanced_synthetic(req: ExecuteRequest) -> dict[str, Any]:
+    """Execute exactly one home-only synthetic transition, never arbitrary paths or payloads."""
+    spec = HOME_ADVANCED_ACTIONS.get(req.tool)
+    if not (HOME_LAB_EXPLORATORY and os.environ.get("GADE_ADVANCED_SYNTHETIC_ENABLED") == "1"
+            and spec is not None and req.action_id == spec[0]):
+        return structured_result(req.tool, {"error": "advanced synthetic action unavailable"}, success=False)
+    try:
+        expected = canonical_action_parameters(action_id=spec[0], target=req.target,
+            port=req.port, protocol=req.protocol, service=req.service)
+    except ValueError:
+        expected = None
+    if req.authorization_parameters != expected:
+        return structured_result(req.tool, {"error": "advanced synthetic contract mismatch"}, success=False)
+    case_id = req.correlation_id or ""
+    run_id = case_id.split("-")[-1] if case_id.startswith("GADE-L3-MULTI-A-R") else ""
+    username = os.environ.get("GADE_L2_TEST_USERNAME", "")
+    password = os.environ.get("GADE_L2_TEST_PASSWORD", "")
+    if (not run_id or len(run_id) != 12 or any(ch not in "0123456789abcdef" for ch in run_id)
+            or len(case_id) > 96 or not username or len(password) < 24):
+        return structured_result(req.tool, {"error": "advanced synthetic identity or test account unavailable"}, success=False)
+    headers = {"X-Request-ID": req.request_id or "", "X-Test-Case-ID": case_id,
+               "X-Run-ID": run_id, "Connection": "close"}
+    connection = http.client.HTTPConnection("127.0.0.1", 18080, timeout=8)
+    token_value: str | None = None
+    stage = "login"
+    try:
+        connection.request("POST", "/lab/auth/login",
+            body=json.dumps({"username": username, "password": password}, separators=(",", ":")),
+            headers={**headers, "Content-Type": "application/json"})
+        response = connection.getresponse()
+        login = json.loads(response.read(8192))
+        if (response.status != 200 or not isinstance(login, dict)
+                or login.get("expires_in") != 60 or login.get("test_case_id") != case_id
+                or not isinstance(login.get("session_token"), str)
+                or len(login["session_token"]) < 32):
+            raise ValueError("fixed test-account login failed")
+        token_value = login["session_token"]
+        connection.close()
+        stage = "advanced_action"
+        connection = http.client.HTTPConnection("127.0.0.1", 18080, timeout=8)
+        connection.request("POST", expected["action_path"], body="{}",
+            headers={**headers, "Content-Type": "application/json",
+                     "Authorization": f"Bearer {token_value}"})
+        response = connection.getresponse()
+        effect = json.loads(response.read(8192))
+        state_sha = effect.get("state_sha256") if isinstance(effect, dict) else None
+        if (response.status != 200 or not isinstance(effect, dict)
+                or effect.get("outcome") != "completed" or effect.get("action") != spec[2]
+                or effect.get("run_id") != run_id or effect.get("test_case_id") != case_id
+                or effect.get("request_id") != req.request_id or effect.get("simulation") is not True
+                or not isinstance(state_sha, str) or len(state_sha) != 64
+                or any(ch not in "0123456789abcdef" for ch in state_sha)):
+            raise ValueError("advanced synthetic state proof mismatch")
+        safe_effect = effect.get("effect")
+        if not isinstance(safe_effect, dict) or set(safe_effect) - {
+            "canary_id", "control_simulation", "real_security_controls_changed",
+            "node_ids", "source_node", "destination_node", "record_ids",
+            "message", "ack", "receiver_id", "payload_sha256", "external_network_used",
+            "impact_mode", "real_service_interrupted"}:
+            raise ValueError("advanced synthetic effect contains unreviewed fields")
+        return structured_result(req.tool, {"success": True, "run_id": run_id,
+            "test_case_id": case_id, "request_id": req.request_id,
+            "action": spec[2], "action_http_status": 200,
+            "state_sha256": state_sha, "effect": safe_effect, "simulation": True})
+    except (OSError, http.client.HTTPException, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+        _log_execution_event("advanced_synthetic_failed", stage=stage,
+                             action_id=req.action_id, error_type=type(exc).__name__)
+        return structured_result(req.tool, {"error": "fixed advanced synthetic exchange failed",
+            "failed_stage": stage, "error_type": type(exc).__name__}, success=False)
+    finally:
+        token_value = None
+        connection.close()
+
 def target_url(target: str, port: int | None, service: str | None = None) -> str:
     selected_port = port or 80
     service_name = (service or "").lower()
@@ -544,10 +720,7 @@ def run_nuclei(target: str, port: int | None, service: str | None, canonical_url
     available, reason = nuclei_action_state()
     if not available:
         raise RuntimeError(reason or "nuclei.safe_scan.v1 unavailable")
-    return run_command([
-        "nuclei", "-u", canonical_url or target_url(target, port, service), "-severity",
-        "critical,high", "-rl", "5", "-timeout", "5", "-retries", "0", "-no-color",
-    ])
+    return run_command(nuclei_fixed_argv(canonical_url or target_url(target, port, service)))
 
 
 def run_dirb(target: str, port: int | None, service: str | None) -> dict[str, Any]:
@@ -672,7 +845,12 @@ def health() -> dict[str, Any]:
                                      if os.environ.get("KALI_WORKER_PROFILE", "shared").strip().lower() == "gade-experiment"
                                      else ALLOWED_TOOLS) & PROTECTED_ACTION_TOOLS),
         "allowed_tools": sorted(effective_allowed_tools()),
-        "unavailable_actions": ([] if nuclei_available else [{"action_id": "nuclei.safe_scan.v1", "reason": nuclei_reason}]),
+        "unavailable_actions": (([] if nuclei_available else [{"action_id": "nuclei.safe_scan.v1", "reason": nuclei_reason}])
+            + ([] if "lab_synthetic_role_lease" in effective_allowed_tools() else
+               [{"action_id": "lab.synthetic_role_lease.v1", "reason": "home L4 action disabled by default"}])
+            + ([] if os.environ.get("GADE_ADVANCED_SYNTHETIC_ENABLED") == "1" else
+               [{"action_id": action, "reason": "home advanced synthetic action disabled by default"}
+                for action, _depth, _path in HOME_ADVANCED_ACTIONS.values()])),
         "scope_policy": "worker_enforced_cidr" if scope_enabled else "external_network_controls",
         "scope_enforced_by_worker": scope_enabled,
         "allowed_scopes": [str(scope) for scope in scopes],
@@ -740,6 +918,8 @@ def execute(req: ExecuteRequest) -> dict[str, Any]:
     authorized_url = (req.authorization_parameters or {}).get("canonical_url")
     authorized_sni = (req.authorization_parameters or {}).get("sni")
     handlers = {
+        "lab_synthetic_role_lease": lambda: run_lab_synthetic_role_lease(req),
+        **{tool: (lambda: run_lab_advanced_synthetic(req)) for tool in HOME_ADVANCED_ACTIONS},
         "lab_valid_account_access": lambda: run_lab_valid_account_access(req),
         "lab_fixed_python_execution": lambda: run_lab_fixed_python_execution(req),
         "nmap_service": lambda: run_nmap(req.target),

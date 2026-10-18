@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.database import async_session
+from app.action_contracts import HOME_LAB_EXPLORATORY
 from app.models import AutoLoopDecision, DecisionScore, EvidenceConfidence, NormalizedResult, OpenPort, Target, ToolTask
 from app.tool_task_constants import ACTIVE_TASK_STATUSES, NOT_REQUIRED, PENDING
 from app.tool_task_writer import create_tool_task_if_not_exists
@@ -630,7 +631,11 @@ async def analyze_tool_result_and_generate_task(
             and parsed_output.get("status") != "failed"
         )
 
-        if finding_count == 0 and nuclei_completed_successfully:
+        # The legacy negative path creates a different NormalizedResult shape
+        # for the same ToolResult. In the governed home Run, let the ordinary
+        # canonical normalizer persist its scoped no-finding projection so the
+        # GADE driver can bind governance without replacing a conflicting row.
+        if finding_count == 0 and nuclei_completed_successfully and not HOME_LAB_EXPLORATORY:
             port_row = None
             cve_summary = None
 

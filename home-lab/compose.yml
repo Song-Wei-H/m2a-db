@@ -1,0 +1,90 @@
+name: m2a-home-mode-b
+services:
+  l2-auth:
+    build:
+      context: ../lab/mode-b-target
+      dockerfile: Dockerfile.l2-auth
+    image: m2a-home-l2-auth:local
+    restart: unless-stopped
+    user: "101:101"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=4m,mode=1777
+    mem_limit: 64m
+    cpus: 0.15
+    pids_limit: 32
+    env_file:
+      - ./.env.l2.local
+    environment:
+      GADE_L2_SESSION_TTL_SECONDS: "60"
+    expose: ["8081"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/lab/healthz', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      home-lab:
+        aliases: [mode-b-l2-auth]
+
+  target:
+    image: docker/welcome-to-docker@sha256:c4d56c24da4f009ecf8352146b43497fe78953edb4c679b841732beb97e588b0
+    restart: unless-stopped
+    user: "101:101"
+    command: ["nginx", "-c", "/etc/nginx/mode-b-target.conf", "-g", "daemon off;"]
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+    volumes:
+      - ../lab/mode-b-target/nginx.conf:/etc/nginx/mode-b-target.conf:ro
+      - ../lab/mode-b-target/www:/usr/share/nginx/mode-b-target:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    depends_on:
+      l2-auth:
+        condition: service_healthy
+    networks: [home-lab]
+
+  gateway:
+    image: docker/welcome-to-docker@sha256:c4d56c24da4f009ecf8352146b43497fe78953edb4c679b841732beb97e588b0
+    restart: unless-stopped
+    user: "101:101"
+    command: ["nginx", "-c", "/etc/nginx/home-gateway.conf", "-g", "daemon off;"]
+    ports:
+      - "127.0.0.1:18080:8080"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    mem_limit: 64m
+    cpus: 0.15
+    pids_limit: 32
+    volumes:
+      - ./gateway.conf:/etc/nginx/home-gateway.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    depends_on:
+      target:
+        condition: service_healthy
+    networks: [home-lab, home-publish]
+
+networks:
+  home-lab:
+    name: m2a_home_mode_b_internal
+    internal: true
+  home-publish:
+    name: m2a_home_mode_b_publish

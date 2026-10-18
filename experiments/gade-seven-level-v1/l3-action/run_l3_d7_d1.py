@@ -30,11 +30,13 @@ L3_C_STIMULUS_PATH = L3_DIR / "l3-limited-c-stimulus-v1.json"
 L3_C_STIMULUS = json.loads(L3_C_STIMULUS_PATH.read_text(encoding="utf-8"))
 LEGACY_MULTIROUND_PROTOCOL = "L3_LIMITED_MULTIRROUND_ABC_V1"
 BC_EXPLORATORY_PROTOCOL = "GADE_BC_D1_D3_EXPLORATORY_V1"
+A_L4_ENGINEERING_PROTOCOL = "GADE_A_L4_ENGINEERING_V1"
 ACTIVE_EXPERIMENT_PROTOCOL = os.environ.get("GADE_L3_PROTOCOL", LEGACY_MULTIROUND_PROTOCOL)
 
 from app.action_contracts import (  # noqa: E402
     ACTION_IDENTITIES, ACTION_TEMPLATES,
     ACTION_REQUIRED_ATTACK_DEPTH,
+    LAB_TARGET, LAB_PORT, HOME_LAB_EXPLORATORY, HOME_ADVANCED_ACTIONS, nuclei_fixed_argv,
 )
 from app.action_contracts import canonical_action_parameters  # noqa: E402
 from app.attack_authorization import POLICY_VERSION  # noqa: E402
@@ -56,9 +58,11 @@ from codex_agent_bridge import (  # noqa: E402
     LAB_ACTIONS, build_action_catalog, parse_codex_cli_events, validate_decision_output,
 )
 
-TARGET = "10.56.66.119"
-PORT = 18080
-SCOPE = "10.56.66.119/32"
+TARGET = LAB_TARGET
+PORT = LAB_PORT
+SCOPE = f"{TARGET}/32"
+EXPECTED_WORKER_URL = ("http://127.0.0.1:18001" if os.environ.get("GADE_HOME_LAB_EXPLORATORY") == "1"
+                       else settings.kali_worker_url.rstrip("/"))
 OPERATOR = "windows-host-operator"
 BASE_ACTION_CONFIG = {
     "http_security_headers.collect.v1": {
@@ -83,8 +87,25 @@ BC_HTTPX_ACTION_CONFIG = {
         "allowed_fields": ["canonical_url"], "risk": "low",
     },
 }
+if HOME_LAB_EXPLORATORY:
+    BC_HTTPX_ACTION_CONFIG["nuclei.safe_scan.v1"] = {
+        "tool": "nuclei_safe", "phase": "validation", "tier": 1,
+        "argv": nuclei_fixed_argv("{canonical_url}"),
+        "allowed_fields": ["canonical_url"], "risk": "medium",
+    }
 if ACTIVE_EXPERIMENT_PROTOCOL == BC_EXPLORATORY_PROTOCOL:
     ACTION_CONFIG = {**BASE_ACTION_CONFIG, **BC_HTTPX_ACTION_CONFIG}
+elif ACTIVE_EXPERIMENT_PROTOCOL == A_L4_ENGINEERING_PROTOCOL and HOME_LAB_EXPLORATORY:
+    ACTION_CONFIG = {**BASE_ACTION_CONFIG, **BC_HTTPX_ACTION_CONFIG,
+        "lab.synthetic_role_lease.v1": {
+            "tool": "lab_synthetic_role_lease", "phase": "persistence", "tier": 4,
+            "argv": ["builtin:lab-synthetic-role-lease"], "allowed_fields": [], "risk": "high",
+        }}
+    ACTION_CONFIG.update({action: {
+        "tool": tool, "phase": {5: "credential_access", 6: "discovery", 7: "collection"}[depth],
+        "tier": depth, "argv": [f"builtin:home-advanced:{path}"],
+        "allowed_fields": [], "risk": "high",
+    } for tool, (action, depth, path) in HOME_ADVANCED_ACTIONS.items()})
 elif ACTIVE_EXPERIMENT_PROTOCOL == LEGACY_MULTIROUND_PROTOCOL:
     ACTION_CONFIG = dict(BASE_ACTION_CONFIG)
 else:
@@ -129,6 +150,8 @@ def _multi_round_arm_profiles(protocol: str) -> dict[str, dict[str, Any]]:
     if protocol == BC_EXPLORATORY_PROTOCOL:
         return {"B": {"case": "D1", "authorized_depth": 1},
                 "C": {"case": "D3", "authorized_depth": 3}}
+    if protocol == A_L4_ENGINEERING_PROTOCOL:
+        return {"A": {"case": "D7", "authorized_depth": 7}}
     raise ValueError(f"unsupported multi-round protocol: {protocol!r}")
 
 
@@ -426,6 +449,24 @@ def _verify_or_reconcile_validation_action(
     parameter_schema: dict[str, Any],
 ) -> str:
     """Keep current rows exact; normalize only the exact Migration 028 L1 row."""
+    if HOME_LAB_EXPLORATORY and action_id == "nuclei.safe_scan.v1":
+        migration_seed = (
+            action.enabled is True and action.action_id == action_id
+            and action.tool_name == "nuclei_safe" and action.phase == "validation"
+            and action.validation_tier == 2
+            and action.execution_identity == (
+                "argv:nuclei:-u:{canonical_url}:-severity:critical,high:-rl:5:"
+                "-timeout:5:-retries:0:-no-color:v2")
+            and action.template_version == "nuclei_safe_v2"
+            and action.parameter_schema == {"fields": ["target", "host", "port", "protocol",
+                                                      "service", "scheme", "path", "canonical_url", "argv"]}
+        )
+        if migration_seed and validation_tier == 1:
+            action.validation_tier = validation_tier
+            action.execution_identity = execution_identity
+            action.template_version = template_id
+            action.parameter_schema = parameter_schema
+            return "reconciled_exact_home_nuclei_seed"
     canonical_identity = (
         action.enabled is True
         and action.action_id == action_id
@@ -889,6 +930,31 @@ def _action_status(
                     and not isinstance(entry.get("status_code"), bool)
                     and 100 <= entry["status_code"] <= 599,
                     "L1 HTTPX observation differs from the fixed in-scope root endpoint")
+    elif action_id == "nuclei.safe_scan.v1":
+        require(HOME_LAB_EXPLORATORY and parsed.get("success") is True
+                and isinstance(parsed.get("finding_count"), int)
+                and parsed["finding_count"] in {0, 1}
+                and isinstance(parsed.get("findings"), list)
+                and len(parsed["findings"]) == parsed["finding_count"]
+                and parsed.get("parser_success") is True
+                and parsed.get("scan_outcome") == (
+                    "FINDING" if parsed["finding_count"] == 1 else "NO_FINDING"),
+                "Nuclei ToolResult does not contain a bounded parsed finding count")
+        require(isinstance(receipt, dict) and receipt.get("execution_kind") == "subprocess"
+                and receipt.get("subprocess_started") is True
+                and receipt.get("process_exit_code") == 0
+                and isinstance(receipt.get("process_output_sha256"), str)
+                and isinstance(raw_output, str)
+                and hashlib.sha256(raw_output.encode("utf-8", errors="replace")).hexdigest()
+                == receipt["process_output_sha256"].lower(),
+                "Nuclei Worker Receipt does not prove exact completed process output")
+        if parsed["finding_count"]:
+            finding = parsed["findings"][0]
+            require(isinstance(finding, dict)
+                    and finding.get("template_id") == "gade-home-exposed-backup-index"
+                    and finding.get("url") == f"http://{TARGET}:{PORT}/backup/"
+                    and finding.get("severity") == "high" and not finding.get("cve_ids"),
+                    "Nuclei finding differs from the one approved synthetic fixture")
     elif action_id == "lab.valid_account_access.v1":
         require(parsed.get("success") is True and parsed.get("login_http_status") == 200
                 and parsed.get("protected_http_status") == 200
@@ -902,6 +968,27 @@ def _action_status(
                 and parsed.get("test_case_id") == correlation
                 and isinstance(parsed.get("marker_sha256"), str) and len(parsed["marker_sha256"]) == 64,
                 "L3 ToolResult did not verify the controlled execution marker")
+    elif action_id == "lab.synthetic_role_lease.v1":
+        state_sha = parsed.get("state_sha256")
+        require(parsed.get("success") is True and parsed.get("lease_http_status") == 200
+                and parsed.get("protected_http_status") == 200
+                and parsed.get("role") == "synthetic-lab-operator"
+                and parsed.get("lease_ttl_seconds") == 300
+                and parsed.get("simulation") is True
+                and parsed.get("test_case_id") == correlation
+                and isinstance(state_sha, str) and len(state_sha) == 64
+                and all(ch in "0123456789abcdef" for ch in state_sha),
+                "L4 ToolResult did not verify the fixed synthetic role lease and resource change")
+    elif action_id in {item[0] for item in HOME_ADVANCED_ACTIONS.values()}:
+        tool_name = ACTION_CONFIG[action_id]["tool"]
+        fixed_path = HOME_ADVANCED_ACTIONS[tool_name][2]
+        state_sha = parsed.get("state_sha256")
+        require(parsed.get("success") is True and parsed.get("action") == fixed_path
+                and parsed.get("action_http_status") == 200
+                and parsed.get("simulation") is True and parsed.get("test_case_id") == correlation
+                and isinstance(state_sha, str) and len(state_sha) == 64
+                and all(ch in "0123456789abcdef" for ch in state_sha),
+                "advanced synthetic ToolResult differs from the fixed Action Contract")
     else:
         raise RuntimeError("Action result verification has no handler for this action")
 
@@ -1001,12 +1088,20 @@ def build_l1_normalized_output(
     raise RuntimeError(f"No reviewed L1 normalization contract exists for {action_id}")
 
 
-async def persist_l1_normalized_result(
+async def persist_action_normalized_result(
     *, output: Path, database_run_id: str, run_id: str, tool_result: ToolResult,
     target_id: int, open_port_id: int, action_id: str, parsed: dict[str, Any],
-    raw_output: str | None = None,
+    raw_output: str | None = None, proposal_id: int, decision_id: int,
+    authorization_id: int, authorized_depth: int,
 ) -> dict[str, Any]:
     tool_name = ACTION_CONFIG[action_id]["tool"]
+    receipt = tool_result.execution_receipt or {}
+    raw_sha = hashlib.sha256((raw_output or "").encode("utf-8")).hexdigest()
+    require(tool_result.success is True and tool_result.action_id == action_id
+            and tool_result.tool_task_id is not None and tool_result.id is not None
+            and isinstance(receipt, dict) and receipt.get("authorization_id") == authorization_id
+            and receipt.get("process_output_sha256") == raw_sha,
+            "NormalizedResult source ToolResult/Receipt/Grant binding is invalid")
     async with async_session() as db, db.begin():
         identity = (await db.execute(text("select current_database(),current_user"))).one()
         require(identity[0] == f"gade_{database_run_id}_fresh" and identity[1] == identity[0],
@@ -1026,6 +1121,19 @@ async def persist_l1_normalized_result(
                 and isinstance(normalized_rows[0], dict),
                 "Canonical M2A normalization did not produce exactly one fixed-target evidence row")
         normalized = normalized_rows[0]
+        # The normal analysis pipeline may have already saved this exact
+        # canonical projection before the GADE driver binds governance data.
+        canonical_projection = dict(normalized)
+        require(action_id in ACTION_CONFIG and authorized_depth >= ACTION_REQUIRED_ATTACK_DEPTH[action_id],
+                "normalization action/depth binding is invalid")
+        normalized["governance"] = {
+            "run_id": run_id, "action_id": action_id,
+            "proposal_id": proposal_id, "authorization_decision_id": decision_id,
+            "execution_authorization_id": authorization_id,
+            "authorized_depth": authorized_depth, "gade_outcome": "ALLOW",
+            "worker_result_success": True,
+            "target_side_verification": "SEPARATE_TARGET_EVIDENCE_REQUIRED",
+        }
         evidence_type = normalized.get("evidence_type")
         require(normalized.get("tool") == tool_name and normalized.get("target") == TARGET
                 and normalized.get("port") == PORT
@@ -1042,10 +1150,14 @@ async def persist_l1_normalized_result(
             require(existing.target_id == target_id and existing.open_port_id == open_port_id
                     and existing.tool_name == tool_name
                     and existing.evidence_type == evidence_type
-                    and existing.normalized_output == normalized,
+                    and existing.normalized_output in (canonical_projection, normalized),
                     "existing NormalizedResult conflicts with the exact ToolResult; refusing duplicate or overwrite")
             row = existing
-            write_status = "ALREADY_PERSISTED_IDENTICAL"
+            if existing.normalized_output == canonical_projection:
+                row.normalized_output = normalized
+                write_status = "ENRICHED_EXISTING_CANONICAL"
+            else:
+                write_status = "ALREADY_PERSISTED_IDENTICAL"
         else:
             row = NormalizedResult(target_id=target_id, open_port_id=open_port_id,
                 tool_result_id=tool_result.id, tool_name=tool_name,
@@ -1079,6 +1191,9 @@ def safe_feedback_output(
             "success", "status", "evidence_type", "host", "port", "url",
             "parser_success", "entry_count", "status_codes",
         ),
+        "nuclei.safe_scan.v1": (
+            "success", "status", "evidence_type", "host", "port", "finding_count", "scan_outcome",
+        ),
         "lab.valid_account_access.v1": (
             "success", "login_http_status", "protected_http_status", "session_ttl_seconds",
             "protected_resource", "scenario", "test_case_id",
@@ -1087,6 +1202,14 @@ def safe_feedback_output(
             "success", "login_http_status", "execute_http_status", "run_id", "test_case_id",
             "script_id", "script_sha256", "process_exit_status", "marker_sha256",
         ),
+        "lab.synthetic_role_lease.v1": (
+            "success", "run_id", "test_case_id", "request_id",
+            "lease_http_status", "protected_http_status", "role",
+            "lease_ttl_seconds", "state_sha256", "simulation",
+        ),
+        **{action: ("success", "run_id", "test_case_id", "request_id",
+                    "action", "action_http_status", "state_sha256", "simulation")
+           for action, _depth, _path in HOME_ADVANCED_ACTIONS.values()},
     }
     require(action_id in fields and isinstance(parsed, dict),
             "cannot create Agent feedback for an unknown Action or malformed ToolResult")
@@ -1106,6 +1229,17 @@ def safe_feedback_output(
         })
         _, normalized = build_l1_normalized_output(action_id, parsed, raw_output=raw_output)
         projected["normalized_observations"] = normalized["observations"]
+        projected["target_data_trust"] = "UNTRUSTED_TARGET_DATA"
+    if action_id == "nuclei.safe_scan.v1":
+        require(isinstance(receipt, dict), "Nuclei feedback lacks Worker execution receipt")
+        projected["process_exit_code"] = receipt.get("process_exit_code")
+        projected["process_output_sha256"] = receipt.get("process_output_sha256")
+        projected["finding"] = (
+            {"template_id": "gade-home-exposed-backup-index",
+             "url": f"http://{TARGET}:{PORT}/backup/",
+             "interpretation": "synthetic directory-index configuration candidate, not a CVE"}
+            if parsed.get("finding_count") == 1 else None
+        )
         projected["target_data_trust"] = "UNTRUSTED_TARGET_DATA"
     return projected
 
@@ -1214,7 +1348,8 @@ async def run_case(
             db, target=target, tool_name=tool_name, parameters=params,
             reason=decision["rationale"], confidence=None,
             provider=f"codex-cli/{envelope['model']}"[:100],
-            authorization_source="gade-tier-policy", ttl_seconds=300,
+            authorization_source="gade-tier-policy",
+            ttl_seconds=60 if action_available and config["tier"] >= 4 else 300,
             human_approved_by=approver if tier_requires_approval else None,
             raw_proposal=raw_proposal, evidence_refs=evidence_refs, denial_reason=denial_reason,
         )
@@ -1324,18 +1459,27 @@ async def run_case(
         safe_output = safe_feedback_output(
             action_id, parsed, receipt=receipt, raw_output=result.raw_output,
         )
-        normalized_result = None
-        if (multiround and ACTIVE_EXPERIMENT_PROTOCOL == BC_EXPLORATORY_PROTOCOL
-                and action_id in {"http_security_headers.collect.v1", "httpx.web_probe.v1"}):
-            normalized_result = await persist_l1_normalized_result(
-                output=output, database_run_id=database_run_id, run_id=run_id, tool_result=result,
-                target_id=int(state["target_id"]), open_port_id=int(state["open_port_id"]),
-                action_id=action_id, parsed=parsed, raw_output=result.raw_output,
-            )
         require(trace.get("status") == "COMPLETE" and not trace.get("issues"),
                 f"Execution Trace is incomplete: {trace.get('issues')}")
         require(grant.consumed_count == 1 and grant.execution_limit == 1,
                 "one-use GADE Grant was not consumed exactly once")
+        normalized_result = None
+        if multiround and ACTIVE_EXPERIMENT_PROTOCOL in {BC_EXPLORATORY_PROTOCOL, A_L4_ENGINEERING_PROTOCOL}:
+            proposal_record = state.get("proposal") or {}
+            decision_record = state.get("authorization_decision") or {}
+            require(proposal_record.get("id") == decision_record.get("proposal_id") == grant.proposal_id
+                    and decision_record.get("id") is not None
+                    and decision_record.get("outcome") == "ALLOW",
+                    "normalized result lacks exact GADE proposal/decision binding")
+            normalized_result = await persist_action_normalized_result(
+                output=output, database_run_id=database_run_id, run_id=run_id, tool_result=result,
+                target_id=int(state["target_id"]), open_port_id=int(state["open_port_id"]),
+                action_id=action_id, parsed=parsed, raw_output=result.raw_output,
+                proposal_id=proposal_record["id"], decision_id=decision_record["id"],
+                authorization_id=grant.id, authorized_depth=depth,
+            )
+            safe_output["normalized_result_ref"] = f"normalized_result:{normalized_result['id']}"
+            safe_output["normalized_output_sha256"] = normalized_result["normalized_output_sha256"]
         state.update({"worker_request": task.execution_request, "request_id": receipt.get("request_id"),
             "tool_task": row_dict(task), "execution_authorization": row_dict(grant),
             "tool_result": row_dict(result), "worker_receipt": receipt,
@@ -1364,7 +1508,7 @@ def validate_runtime_identity(output: Path) -> tuple[str, Any]:
             "M2A scope must be exactly the isolated target /32")
     require(set(settings.allowed_tools_list) == SUPPORTED_TOOLS,
             "M2A must enable exactly the three verified L1-L3 experiment tools")
-    require(settings.kali_worker_url.rstrip("/") == "http://10.56.64.121:8001",
+    require(settings.kali_worker_url.rstrip("/") == EXPECTED_WORKER_URL,
             "M2A Worker URL mismatch")
     db_url = urlsplit(settings.database_url)
     require(db_url.hostname == "127.0.0.1" and db_url.port == int(os.environ["GADE_L3_DB_PORT"])

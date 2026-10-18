@@ -50,3 +50,4 @@ reports/
 mlruns/
 .m2a-launcher.lock
 experiments/**/local-only/
+home-lab/tools/
