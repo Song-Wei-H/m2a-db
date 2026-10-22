@@ -110,3 +110,54 @@ def test_no_evidence_does_not_crash_and_reduces_adjusted_score():
 
     assert result.evidence_adjustment < 0
     assert result.adjusted_risk_score < result.base_risk_score
+
+
+def test_exact_osv_candidate_is_bounded_and_not_marked_confirmed():
+    without_candidate = risk()
+    with_candidate = risk(parsed_output={
+        "parser_success": True,
+        "status_code": 200,
+        "success": True,
+        "enrichment_context": {
+            "schema": "m2a-enrichment-context-v1",
+            "cve": {"status": "not_evaluated"},
+            "osv": {
+                "status": "complete",
+                "package_states": [{
+                    "status": "complete",
+                    "vulnerability_count": 20,
+                    "match_confidence": 1.0,
+                    "package_identity": {"ecosystem": "PyPI", "name": "demo", "version": "1.2.3"},
+                }],
+                "evidence_refs": [{"ref": "normalized_results:5"}],
+            },
+        },
+    })
+
+    assert with_candidate.evidence_adjustment - without_candidate.evidence_adjustment == 0.25
+    component = with_candidate.reasoning[0]["evidence"]["osv_advisory_candidate"]
+    assert component["candidate_count"] == 20
+    assert component["confirmed_vulnerability"] is False
+    assert component["adjustment"] == 0.25
+
+
+def test_product_banner_or_incomplete_osv_identity_does_not_change_risk():
+    baseline = risk()
+    unverified = risk(parsed_output={
+        "status_code": 200,
+        "success": True,
+        "product": "demo",
+        "version": "1.2.3",
+        "enrichment_context": {
+            "osv": {
+                "status": "partial",
+                "package_states": [{
+                    "status": "partial",
+                    "vulnerability_count": 1,
+                    "match_confidence": 1.0,
+                    "package_identity": {"ecosystem": "PyPI", "name": "demo", "version": None},
+                }],
+            },
+        },
+    })
+    assert unverified.evidence_adjustment == baseline.evidence_adjustment

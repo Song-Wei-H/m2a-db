@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, Numeric, SmallInteger, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, Integer, BigInteger, Numeric, SmallInteger, String, Text, func
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
@@ -200,6 +200,58 @@ class NormalizedResult(Base):
         DateTime(timezone=False),
         server_default=func.now(),
     )
+
+
+class OsvPackageQueryCache(Base):
+    """Latest bounded OSV query state for an exact package identity."""
+
+    __tablename__ = "osv_package_query_cache"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    cache_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    ecosystem: Mapped[str] = mapped_column(String(80), nullable=False)
+    package_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    package_version: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, server_default="OSV")
+    retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retry_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    response_sha256: Mapped[str | None] = mapped_column(String(64))
+    last_attempt_sha256: Mapped[str | None] = mapped_column(String(64))
+    response_summary: Mapped[dict | None] = mapped_column(JSONB)
+    match_confidence: Mapped[float | None] = mapped_column(Float)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class OsvNormalizedEvidence(Base):
+    """Links a persisted normalized result to an OSV query or explicit skip."""
+
+    __tablename__ = "osv_normalized_evidence"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    normalized_result_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("normalized_results.id", ondelete="CASCADE"), nullable=False
+    )
+    identity_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    cache_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("osv_package_query_cache.id", ondelete="SET NULL")
+    )
+    package_identity: Mapped[dict | None] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, server_default="OSV")
+    retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    response_sha256: Mapped[str | None] = mapped_column(String(64))
+    last_attempt_sha256: Mapped[str | None] = mapped_column(String(64))
+    match_confidence: Mapped[float | None] = mapped_column(Float)
+    evidence_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    result_summary: Mapped[dict | None] = mapped_column(JSONB)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ToolTask(Base):

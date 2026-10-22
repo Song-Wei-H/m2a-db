@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     cve_query_safety_limit: int = 5000
     cve_report_candidate_budget: int = 50
     max_cve_validations_per_round: int = 3
+    # OSV lookup is opt-in until Migration 038 is applied in the target
+    # environment. The enrichment path never changes GADE authorization.
+    osv_enrichment_enabled: bool = False
+    osv_api_base_url: str = "https://api.osv.dev"
+    osv_timeout_seconds: float = 5.0
+    osv_max_retries: int = 2
+    osv_rate_limit_per_second: float = 2.0
+    osv_cache_ttl_seconds: int = 86400
+    osv_retry_cooldown_seconds: int = 300
 
     @property
     def allowed_scopes_list(self) -> list[str]:

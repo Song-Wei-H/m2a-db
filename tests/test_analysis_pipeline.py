@@ -2,8 +2,9 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from sqlalchemy import select
 
-from worker.analysis_pipeline import analyze_tool_result_and_generate_task, _existing_tool_task
-from app.models import NormalizedResult, ToolTask
+from worker.analysis_pipeline import analyze_tool_result_and_generate_task, _existing_tool_task, _persist_normalized_evidence
+from app.models import DecisionScore, NormalizedResult, ToolTask
+from worker.risk_engine_v3 import calculate_risk
 
 
 class FakeAsyncSessionContext:
@@ -52,7 +53,14 @@ async def test_analysis_pipeline_httpx_basic_semantics():
     with patch("worker.analysis_pipeline.get_next_tool_task", new_callable=AsyncMock) as mock_generate, \
          patch("worker.analysis_pipeline.async_session", return_value=FakeAsyncSessionContext(fake_session)), \
          patch("worker.analysis_pipeline.get_learning_feedback", new_callable=AsyncMock) as mock_feedback, \
-         patch("worker.analysis_pipeline.summarize_cve_risk", new_callable=AsyncMock) as mock_cve:
+         patch("worker.analysis_pipeline.summarize_cve_risk", new_callable=AsyncMock) as mock_cve, \
+         patch("worker.analysis_pipeline._persist_normalized_evidence", new_callable=AsyncMock, return_value=[41]) as persist_evidence, \
+         patch("worker.analysis_pipeline.enrich_normalized_result", new_callable=AsyncMock, return_value={
+             "status": "complete", "vulnerability_count": 1, "vulnerabilities": [],
+             "package_states": [], "evidence_refs": [{"ref": "normalized_results:41"}],
+             "trust": "untrusted_external_advisory",
+         }) as osv_enrichment, \
+         patch("worker.analysis_pipeline.calculate_risk", wraps=calculate_risk) as risk_call:
         
         # Mock return values
         mock_generate.return_value = {
@@ -113,6 +121,45 @@ async def test_analysis_pipeline_httpx_basic_semantics():
     assert result["decision_result"]["recommended_tool"] == "nuclei_safe"
     # Verify task generation was called
     mock_generate.assert_awaited_once()
+    persist_evidence.assert_awaited_once()
+    osv_enrichment.assert_awaited_once_with(41)
+    assert risk_call.call_args.kwargs["parsed_output"]["enrichment_context"]["osv"]["status"] == "complete"
+    decision = next(call.args[0] for call in fake_session.add.call_args_list if isinstance(call.args[0], DecisionScore))
+    assert decision.input_snapshot["enrichment_context"]["osv"]["evidence_refs"][0]["ref"] == "normalized_results:41"
+
+
+@pytest.mark.asyncio
+async def test_normalized_evidence_is_committed_before_enrichment_lookup(monkeypatch):
+    added = []
+    session = make_fake_session()
+    session.add.side_effect = added.append
+
+    async def assign_id():
+        added[-1].id = 77
+
+    session.flush.side_effect = assign_id
+    monkeypatch.setattr(
+        "worker.analysis_pipeline.async_session",
+        lambda: FakeAsyncSessionContext(session),
+    )
+    evidence = {
+        "tool": "inventory_tool",
+        "evidence_type": "package_inventory",
+        "package_identities": [{"ecosystem": "PyPI", "name": "demo", "version": "1.0.0"}],
+    }
+
+    ids = await _persist_normalized_evidence(
+        target_id=2,
+        open_port_id=None,
+        tool_name="inventory_tool",
+        tool_result_id=11,
+        evidence_list=[evidence],
+    )
+
+    assert ids == [77]
+    row = next(item for item in added if isinstance(item, NormalizedResult))
+    assert row.tool_result_id == 11
+    assert row.normalized_output == evidence
 
 
 @pytest.mark.asyncio

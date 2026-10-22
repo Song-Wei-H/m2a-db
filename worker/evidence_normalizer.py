@@ -10,6 +10,8 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 
+from worker.package_identity import extract_package_identities
+
 Evidence = dict[str, Any]
 
 __all__ = ["normalize_tool_result"]
@@ -395,26 +397,35 @@ def normalize_tool_result(
     schema.
     """
     if tool_name == "httpx_basic":
-        return _httpx_normalize(parsed_output, raw_output, ctx, tool_result_id)
-    if tool_name == "nuclei_safe":
-        return _nuclei_normalize(parsed_output, raw_output, ctx, tool_result_id)
-    if tool_name == "nmap_service":
-        return _nmap_normalize(parsed_output, raw_output, ctx, tool_result_id)
-    if tool_name == "dirb_safe":
-        return _dirb_normalize(parsed_output, raw_output, ctx, tool_result_id)
-    if tool_name == "ssh-enum":
-        return _ssh_enum_normalize(parsed_output, raw_output, ctx, tool_result_id)
-    if tool_name == "mysql-info":
-        return _mysql_info_normalize(parsed_output, raw_output, ctx, tool_result_id)
-    if tool_name in {"tls_certificate", "http_security_headers", "dns_metadata"}:
-        return _remote_evidence_normalize(tool_name, parsed_output, raw_output, ctx, tool_result_id)
-    return _generic_normalize(
-        tool_name,
-        parsed_output,
-        raw_output,
-        ctx,
-        tool_result_id,
-    )
+        evidence_list = _httpx_normalize(parsed_output, raw_output, ctx, tool_result_id)
+    elif tool_name == "nuclei_safe":
+        evidence_list = _nuclei_normalize(parsed_output, raw_output, ctx, tool_result_id)
+    elif tool_name == "nmap_service":
+        evidence_list = _nmap_normalize(parsed_output, raw_output, ctx, tool_result_id)
+    elif tool_name == "dirb_safe":
+        evidence_list = _dirb_normalize(parsed_output, raw_output, ctx, tool_result_id)
+    elif tool_name == "ssh-enum":
+        evidence_list = _ssh_enum_normalize(parsed_output, raw_output, ctx, tool_result_id)
+    elif tool_name == "mysql-info":
+        evidence_list = _mysql_info_normalize(parsed_output, raw_output, ctx, tool_result_id)
+    elif tool_name in {"tls_certificate", "http_security_headers", "dns_metadata"}:
+        evidence_list = _remote_evidence_normalize(tool_name, parsed_output, raw_output, ctx, tool_result_id)
+    else:
+        evidence_list = _generic_normalize(
+            tool_name,
+            parsed_output,
+            raw_output,
+            ctx,
+            tool_result_id,
+        )
+
+    identities, identity_status = extract_package_identities(parsed_output)
+    for evidence in evidence_list:
+        # Only explicit package/ecosystem/version or supported PURL values are
+        # carried forward. Product banners and generic versions remain separate.
+        evidence["package_identities"] = [identity.as_dict() for identity in identities]
+        evidence["package_identity_status"] = identity_status
+    return evidence_list
 
 
 # ---------------------------------------------------------------------------

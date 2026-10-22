@@ -13,6 +13,7 @@ from app.tool_task_constants import ACTIVE_TASK_STATUSES, NOT_REQUIRED, PENDING
 from app.tool_task_writer import create_tool_task_if_not_exists
 from worker.confidence_scoring import calculate_confidence
 from worker.cve_enrichment import summarize_cve_risk
+from worker.osv_enrichment import build_enrichment_context, enrich_normalized_result
 from worker.evidence_normalizer import normalize_tool_result
 from worker.learning_engine import get_learning_feedback, record_learning_feedback
 from worker.hybrid_ranking import HybridRanking
@@ -35,6 +36,54 @@ __all__ = ["analyze_tool_result_and_generate_task"]
 logger = logging.getLogger(__name__)
 
 HTTP_SERVICES = {"http", "https", "http-alt", "www", "ssl/http"}
+
+
+async def _persist_normalized_evidence(
+    *,
+    target_id: int,
+    open_port_id: int | None,
+    tool_name: str,
+    tool_result_id: int | None,
+    evidence_list: list[dict[str, Any]],
+) -> list[int]:
+    """Commit normalized evidence before any enrichment network request.
+
+    Replays of the same ToolResult/evidence reuse the exact existing row; the
+    function never updates or replaces its original normalized payload.
+    """
+    ids: list[int] = []
+    async with async_session() as db, db.begin():
+        existing_query = select(NormalizedResult).where(
+            NormalizedResult.target_id == target_id,
+            NormalizedResult.tool_name == tool_name,
+        )
+        if tool_result_id is not None:
+            existing_query = existing_query.where(NormalizedResult.tool_result_id == tool_result_id)
+        else:
+            existing_query = existing_query.where(NormalizedResult.tool_result_id.is_(None))
+        if open_port_id is None:
+            existing_query = existing_query.where(NormalizedResult.open_port_id.is_(None))
+        else:
+            existing_query = existing_query.where(NormalizedResult.open_port_id == open_port_id)
+        existing_rows = list((await db.execute(existing_query.order_by(NormalizedResult.id))).scalars().all())
+        for evidence in evidence_list:
+            existing = next((row for row in existing_rows if row.normalized_output == evidence), None)
+            if existing is not None:
+                ids.append(existing.id)
+                continue
+            row = NormalizedResult(
+                target_id=target_id,
+                open_port_id=open_port_id,
+                tool_result_id=tool_result_id,
+                tool_name=tool_name,
+                evidence_type=evidence.get("evidence_type"),
+                normalized_output=evidence,
+            )
+            db.add(row)
+            await db.flush()
+            ids.append(row.id)
+            existing_rows.append(row)
+    return ids
 
 
 async def _build_learning_metadata(
@@ -322,6 +371,8 @@ async def _generate_tasks_from_nmap_open_ports(
                 open_port_id=port.id,
             )
 
+            enrichment_context = build_enrichment_context(cve_summary=cve_summary)
+
             feedback = await get_learning_feedback(
                 db,
                 "nmap_service",
@@ -351,6 +402,7 @@ async def _generate_tasks_from_nmap_open_ports(
                         "best_match_type": cve_summary.best_match_type,
                         "best_match_confidence": cve_summary.best_match_confidence,
                     },
+                    "enrichment_context": enrichment_context,
                 },
                 raw_output="",
                 base_confidence=score["confidence"],
@@ -474,6 +526,7 @@ async def _generate_tasks_from_nmap_open_ports(
                         "best_match_type": cve_summary.best_match_type,
                         "best_match_confidence": cve_summary.best_match_confidence,
                     },
+                    "enrichment_context": enrichment_context,
                     "cve_gate": nmap_decision_result.get("cve_gate"),
                     "verification_state": nmap_decision_result.get("verification_state"),
                     **learning_pipeline_result.metadata(),
@@ -657,7 +710,10 @@ async def analyze_tool_result_and_generate_task(
                 epss=cve_summary.max_epss if cve_summary else None,
                 kev=cve_summary.has_kev if cve_summary else False,
                 tool_name=tool_name,
-                parsed_output=parsed_output,
+                parsed_output={
+                    **parsed_output,
+                    "enrichment_context": build_enrichment_context(cve_summary=cve_summary),
+                },
                 raw_output=raw_output,
                 base_confidence=0.80,
                 learning_feedback=feedback,
@@ -785,6 +841,7 @@ async def analyze_tool_result_and_generate_task(
                         "tool_result_id": tool_result_id,
                         "learning_feedback": feedback,
                         "parsed_output": parsed_output,
+                        "enrichment_context": build_enrichment_context(cve_summary=cve_summary),
                         **learning_pipeline_result.metadata(),
                     },
                 )
@@ -911,7 +968,18 @@ async def analyze_tool_result_and_generate_task(
             }
         ]
 
-    for evidence in evidence_list:
+    # Persist the canonical normalized observations before enrichment starts.
+    # OSV lookups are external, fallible evidence and must never be the only
+    # surviving copy of the tool result when a lookup or later risk step fails.
+    normalized_result_ids = await _persist_normalized_evidence(
+        target_id=target_id,
+        open_port_id=open_port_id,
+        tool_name=tool_name,
+        tool_result_id=tool_result_id,
+        evidence_list=evidence_list,
+    )
+
+    for evidence, normalized_result_id in zip(evidence_list, normalized_result_ids, strict=True):
         mitre_mapping = map_to_mitre(evidence)
 
         confidence_result = calculate_confidence(
@@ -934,6 +1002,33 @@ async def analyze_tool_result_and_generate_task(
                     open_port_id=open_port_id,
                 )
 
+        # This async enrichment is driven only from the committed
+        # NormalizedResult. OSV is opt-in until Migration 038 is applied, and
+        # any adapter/database failure is represented as a failed lookup, never
+        # as a clean/no-vulnerability result.
+        try:
+            osv_context = await enrich_normalized_result(normalized_result_id)
+        except Exception as exc:
+            logger.exception(
+                "OSV enrichment unavailable normalized_result_id=%s",
+                normalized_result_id,
+            )
+            osv_context = {
+                "status": "failed",
+                "vulnerability_count": 0,
+                "vulnerabilities": [],
+                "cve_aliases": [],
+                "evidence_refs": [{"ref": f"normalized_results:{normalized_result_id}", "source": "OSV"}],
+                "package_states": [{"status": "failed", "error_code": type(exc).__name__}],
+                "validation_status": "candidate_requires_independent_validation",
+                "trust": "untrusted_external_advisory",
+            }
+
+        enrichment_context = build_enrichment_context(
+            cve_summary=cve_summary,
+            osv_context=osv_context,
+        )
+
         risk_parsed_output = dict(parsed_output)
         if cve_summary is not None:
             risk_parsed_output["cve_summary"] = {
@@ -946,6 +1041,7 @@ async def analyze_tool_result_and_generate_task(
                 "best_match_type": cve_summary.best_match_type,
                 "best_match_confidence": cve_summary.best_match_confidence,
             }
+        risk_parsed_output["enrichment_context"] = enrichment_context
 
         risk_v3 = calculate_risk(
             target_id=target_id,
@@ -1056,16 +1152,6 @@ async def analyze_tool_result_and_generate_task(
             )
 
             db.add(evidence_confidence)
-            db.add(
-                NormalizedResult(
-                    target_id=target_id,
-                    open_port_id=open_port_id,
-                    tool_result_id=tool_result_id,
-                    tool_name=tool_name,
-                    evidence_type=evidence.get("evidence_type"),
-                    normalized_output=evidence,
-                )
-            )
 
             decision = DecisionScore(
                 target_id=target_id,
@@ -1111,6 +1197,7 @@ async def analyze_tool_result_and_generate_task(
                     "mitre_mapping": mitre_mapping,
                     "confidence_result": confidence_result,
                     "parsed_output": risk_parsed_output,
+                    "enrichment_context": enrichment_context,
                     "round_value": round_value,
                     "feature_vector_version": FEATURE_VECTOR_VERSION,
                     "label_version": LABEL_VERSION,

@@ -1,4 +1,6 @@
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from app.config import settings
 from worker import llm_decision
@@ -60,3 +62,56 @@ def test_litellm_decision_normalizes_string_null_tool(monkeypatch):
 
     assert result["raw"]["recommended_tool"] == "null"
     assert result["validated"]["recommended_tool"] is None
+
+
+@pytest.mark.asyncio
+async def test_build_payload_includes_unified_enrichment_context_from_snapshot(monkeypatch):
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    session.execute = AsyncMock(return_value=result)
+    monkeypatch.setattr(llm_decision, "async_session", lambda: session)
+    context = {
+        "schema": "m2a-enrichment-context-v1",
+        "cve": {"status": "not_evaluated", "best_cve": None, "best_match_confidence": None},
+        "osv": {
+            "status": "complete",
+            "vulnerability_count": 1,
+            "trust": "untrusted_external_advisory",
+            "evidence_refs": [{"ref": "normalized_results:5", "response_sha256": "b" * 64}],
+        },
+    }
+    decision = MagicMock()
+    decision.input_snapshot = {"enrichment_context": context}
+    decision.id = 9
+    decision.target_id = 2
+    decision.open_port_id = 3
+
+    payload = await llm_decision.build_payload(decision)
+
+    assert payload["enrichment_context"] == context
+    assert payload["enrichment_context"]["osv"]["evidence_refs"][0]["ref"] == "normalized_results:5"
+
+
+@pytest.mark.asyncio
+async def test_build_payload_back_compat_maps_legacy_parsed_cve_summary(monkeypatch):
+    session = MagicMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    session.execute = AsyncMock(return_value=result)
+    monkeypatch.setattr(llm_decision, "async_session", lambda: session)
+    decision = MagicMock()
+    decision.input_snapshot = {"parsed_output": {"cve_summary": {"best_cve": "CVE-2024-12345", "max_cvss": 7.5}}}
+    decision.id = 10
+    decision.target_id = 2
+    decision.open_port_id = 3
+
+    payload = await llm_decision.build_payload(decision)
+
+    assert payload["best_cve"] == "CVE-2024-12345"
+    assert payload["cvss"] == 7.5
+    assert payload["enrichment_context"]["osv"]["status"] == "not_requested"

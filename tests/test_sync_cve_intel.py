@@ -54,6 +54,8 @@ def test_sync_parser_keeps_only_compact_fields_and_no_raw_json():
         "source",
         "last_synced_at",
     }
+    assert record["kev"] is None
+    assert record["epss"] is None
 
 
 def test_description_is_truncated_to_1000_characters():
@@ -77,6 +79,32 @@ def test_kev_and_epss_payloads_update_slim_records():
 
     assert updated[0]["kev"] is True
     assert updated[0]["epss"] == 0.91
+
+
+def test_failed_or_unavailable_kev_epss_feeds_preserve_existing_values():
+    records = [{"cve": "CVE-2024-NGINX-0001", "kev": True, "epss": 0.91}]
+
+    updated = apply_kev_epss(records, kev=None, epss=None)
+
+    assert updated[0]["kev"] is True
+    assert updated[0]["epss"] == 0.91
+
+
+def test_successful_kev_feed_can_mark_negative_without_erasing_missing_epss():
+    records = [{"cve": "CVE-2024-NGINX-0001", "kev": True, "epss": 0.91}]
+
+    updated = apply_kev_epss(records, kev=set(), epss={})
+
+    assert updated[0]["kev"] is False
+    assert updated[0]["epss"] == 0.91
+
+
+def test_upsert_sql_preserves_existing_kev_epss_when_new_feed_value_is_unknown():
+    source = Path("scripts/sync_cve_intel.py").read_text(encoding="utf-8")
+    normalized = " ".join(source.split())
+
+    assert "epss = COALESCE(EXCLUDED.epss, cve_enrichment.epss)" in normalized
+    assert "kev = COALESCE(EXCLUDED.kev, cve_enrichment.kev)" in normalized
 
 
 def test_nvd_url_supports_keyword_search():

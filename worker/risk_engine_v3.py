@@ -158,6 +158,46 @@ def _calculate_evidence_adjustment_v3(
         adjustment += contribution
         reasoning.append(f"finding_count={finding_count} contributes {contribution:.2f}")
 
+    enrichment = parsed_output.get("enrichment_context")
+    osv = enrichment.get("osv") if isinstance(enrichment, dict) else None
+    package_states = osv.get("package_states") if isinstance(osv, dict) else None
+    osv_candidate_count = 0
+    if isinstance(package_states, list):
+        for package_state in package_states:
+            if not isinstance(package_state, dict):
+                continue
+            package = package_state.get("package_identity")
+            count = package_state.get("vulnerability_count")
+            confidence = package_state.get("match_confidence")
+            # OSV only contributes a small investigation hint when an exact,
+            # explicit package/ecosystem/version query returned advisories.
+            # This is never promoted to a confirmed vulnerability or CVE score.
+            if (
+                package_state.get("status") in {"complete", "partial"}
+                and isinstance(package, dict)
+                and all(isinstance(package.get(key), str) and package.get(key) for key in ("ecosystem", "name", "version"))
+                and isinstance(count, int)
+                and count > 0
+                and isinstance(confidence, (int, float))
+                and confidence >= 0.95
+            ):
+                osv_candidate_count += count
+
+    osv_adjustment = min(0.25, 0.05 * osv_candidate_count)
+    if osv_adjustment:
+        adjustment += osv_adjustment
+        reasoning.append(
+            "Exact-version OSV advisory candidate adds a bounded 0.25 maximum; "
+            "independent validation is required and this is not a confirmed vulnerability"
+        )
+    components["osv_advisory_candidate"] = {
+        "status": osv.get("status") if isinstance(osv, dict) else "not_requested",
+        "candidate_count": osv_candidate_count,
+        "adjustment": round(osv_adjustment, 2),
+        "confirmed_vulnerability": False,
+        "evidence_refs": osv.get("evidence_refs", []) if isinstance(osv, dict) else [],
+    }
+
     return round(adjustment, 2), components, reasoning
 
 

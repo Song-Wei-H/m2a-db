@@ -108,7 +108,9 @@ def parse_nvd_payload(payload: dict[str, Any], *, limit: int | None = None) -> l
                 "cvss_score": cvss_score,
                 "severity": severity,
                 "epss": None,
-                "kev": False,
+                # None means the KEV feed has not yet been successfully read.
+                # A failed lookup must not be represented as a negative match.
+                "kev": None,
                 "affected_vendor": cpe["vendor"],
                 "affected_product": cpe["product"],
                 "affected_version": cpe["version"],
@@ -141,10 +143,15 @@ def parse_epss_payload(payload: dict[str, Any]) -> dict[str, float]:
     return scores
 
 
-def apply_kev_epss(records: list[dict[str, Any]], kev: set[str], epss: dict[str, float]) -> list[dict[str, Any]]:
+def apply_kev_epss(
+    records: list[dict[str, Any]],
+    kev: set[str] | None,
+    epss: dict[str, float] | None,
+) -> list[dict[str, Any]]:
     for record in records:
-        record["kev"] = record["cve"] in kev
-        if record["cve"] in epss:
+        if kev is not None:
+            record["kev"] = record["cve"] in kev
+        if epss is not None and record["cve"] in epss:
             record["epss"] = epss[record["cve"]]
     return records
 
@@ -192,8 +199,8 @@ async def upsert_cve_records(records: list[dict[str, Any]]) -> int:
             cvss = EXCLUDED.cvss,
             cvss_score = EXCLUDED.cvss_score,
             severity = EXCLUDED.severity,
-            epss = EXCLUDED.epss,
-            kev = EXCLUDED.kev,
+            epss = COALESCE(EXCLUDED.epss, cve_enrichment.epss),
+            kev = COALESCE(EXCLUDED.kev, cve_enrichment.kev),
             affected_vendor = EXCLUDED.affected_vendor,
             affected_product = EXCLUDED.affected_product,
             affected_version = EXCLUDED.affected_version,
@@ -251,14 +258,14 @@ async def sync_nvd(*, since: str | None, limit: int | None, keyword: str | None,
         kev_ids = parse_kev_payload(fetch_json(CISA_KEV_URL))
     except (OSError, URLError, json.JSONDecodeError, TimeoutError) as exc:
         print(f"warning: KEV sync skipped: {exc}", file=sys.stderr)
-        kev_ids = set()
+        kev_ids = None
     try:
         cve_ids = [record["cve"] for record in records]
         epss_url = f"{EPSS_API_URL}?{urlencode({'cve': ','.join(cve_ids)})}" if cve_ids else EPSS_API_URL
         epss_scores = parse_epss_payload(fetch_json(epss_url))
     except (OSError, URLError, json.JSONDecodeError, TimeoutError) as exc:
         print(f"warning: EPSS sync skipped: {exc}", file=sys.stderr)
-        epss_scores = {}
+        epss_scores = None
 
     apply_kev_epss(records, kev_ids, epss_scores)
     if dry_run:
