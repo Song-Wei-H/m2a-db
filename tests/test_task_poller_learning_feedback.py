@@ -1,11 +1,10 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
-import hashlib
-from pathlib import Path
 
 import pytest
 
+from kali_worker.build_info import worker_build_sha256
 from worker.task_poller import _persist_result, _with_dispatch_correlation, execute_task, fetch_pending_tasks
 from worker.tool_runner import TaskContext, ToolRunOutcome
 
@@ -64,9 +63,7 @@ def test_dispatch_correlation_is_a_uuid_bound_to_selected_template():
     UUID(correlated.request_id)
     assert correlated.template_id == "http_security_headers_v2"
     assert len(correlated.expected_worker_build_sha256) == 64
-    assert correlated.expected_worker_build_sha256 == hashlib.sha256(
-        (Path(__file__).resolve().parents[1] / "kali_worker" / "app.py").read_bytes()
-    ).hexdigest()
+    assert correlated.expected_worker_build_sha256 == worker_build_sha256()
     assert correlated.task_id == ctx.task_id
 
 

@@ -85,6 +85,7 @@ def receipt_for(payload: dict, *, request_id: str | None = None, outcome: str = 
         "executed_action": payload["action_id"],
         "executed_parameters": payload["authorization_parameters"],
         "execution_identity": payload["execution_identity"],
+        "worker_replay_claim": "PERSISTED_SINGLE_USE",
         "handler_invoked": True,
         "request_received_at_utc": "2026-10-14T02:12:05.000000Z",
         "handler_started_at_utc": "2026-10-14T02:12:05.100000Z",
@@ -150,6 +151,26 @@ async def test_receipt_with_mismatched_request_id_is_rejected():
         "status": "completed", "command": "builtin:http_security_headers", "raw_output": "ok",
         "parsed_result": {"success": True},
         "execution_receipt": receipt_for(payload, request_id=str(uuid4())),
+    }
+    client = FakeClient(FakeResponse(200, body))
+    with patch("worker.remote_runner.httpx.AsyncClient", return_value=client):
+        result = await run_remote_tool(ctx)
+
+    assert result.success is False
+    assert result.error_message == "Worker authority-to-execution drift"
+    assert result.worker_exchange["receipt_valid"] is False
+
+
+@pytest.mark.asyncio
+async def test_receipt_without_persistent_replay_claim_is_rejected():
+    ctx = governed_context()
+    from app.execution_trace import execution_request
+    payload = execution_request(ctx)
+    receipt = receipt_for(payload)
+    receipt.pop("worker_replay_claim")
+    body = {
+        "status": "completed", "command": "builtin:http_security_headers", "raw_output": "ok",
+        "parsed_result": {"success": True}, "execution_receipt": receipt,
     }
     client = FakeClient(FakeResponse(200, body))
     with patch("worker.remote_runner.httpx.AsyncClient", return_value=client):

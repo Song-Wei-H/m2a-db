@@ -3,6 +3,7 @@ import hashlib
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.action_contracts import (
@@ -20,6 +21,11 @@ TARGET = "10.56.66.119"
 PORT = 18080
 SCRIPT_ID = "gade-controlled-python-execution-v1"
 SCRIPT_SHA = "b6d8391432ad8f0f993a51c2c35e13d86354f3d0220c3e1c71d69e82a5f164bb"
+
+
+@pytest.fixture(autouse=True)
+def worker_replay_ledger(monkeypatch, tmp_path):
+    monkeypatch.setenv("KALI_WORKER_REPLAY_DB_PATH", str(tmp_path / "worker-replay.sqlite3"))
 
 
 def make_request(**overrides):

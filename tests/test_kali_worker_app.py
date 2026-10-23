@@ -10,7 +10,13 @@ from app.execution_governance import parameter_hash
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from kali_worker.build_info import worker_build_sha256
 from kali_worker import app as worker
+
+
+@pytest.fixture(autouse=True)
+def worker_replay_ledger(monkeypatch, tmp_path):
+    monkeypatch.setenv("KALI_WORKER_REPLAY_DB_PATH", str(tmp_path / "worker-replay.sqlite3"))
 
 
 def test_health_declares_evidence_tools_and_external_scope_policy():
@@ -19,6 +25,7 @@ def test_health_declares_evidence_tools_and_external_scope_policy():
     assert body["scope_policy"] == "external_network_controls"
     assert body["scope_enforced_by_worker"] is False
     assert len(body["build_sha256"]) == 64
+    assert body["build_sha256"] == worker_build_sha256()
     assert {"tls_certificate", "http_security_headers", "dns_metadata"}.issubset(body["allowed_tools"])
 
 
@@ -283,6 +290,7 @@ def test_governed_builtin_receipt_correlates_request_and_records_application_fai
     assert receipt["task_id"] == 31 and receipt["authorization_id"] == 41
     assert receipt["template_id"] == worker.ACTION_TEMPLATES[action]
     assert receipt["worker_build_sha256"] == worker.WORKER_BUILD_SHA256
+    assert receipt["worker_replay_claim"] == "PERSISTED_SINGLE_USE"
     assert receipt["handler_invoked"] is True
     assert receipt["execution_outcome"] == "failed" and receipt["action_success"] is False
     assert receipt["execution_kind"] == "builtin_handler"

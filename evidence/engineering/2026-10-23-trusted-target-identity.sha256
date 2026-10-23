@@ -1,0 +1,16 @@
+08996cf0ed83e730892ab695011837330ee1860c2eea2e2a32eb43da2c86d52a  app/target_identity.py
+74226204ff51ccb47813c4ba26051e8c840e399eb7f859d91c049339971778dd  app/autonomous_action_policy.py
+633080b05706434381548a8207a718202f149838e4fc8806266edea03e9d0452  app/execution_governance.py
+34220c7b941ce7a48b75bd8519c9409d9e507058356e30fc7e15322bda15a1d3  app/execution_trace.py
+a8b1a203f5351b6ea578428af06888b4cf4316fd968bec2121ca6e975eda3875  kali_worker/app.py
+c67139624c4c14561ae19ce1a2c13ded1a1ee870b4fb449ac369b50b22754415  home-lab/action-contracts/autonomous-policy-v1.json
+412729ff3ecdb79e4928bc993c7e93dc8c7524574994788077917d4203778fcb  tests/test_gade_target_identity.py
+ef7fe046a73c49c9b252daa03c532d413fa60815abc6d0ada479f78c1385dbd9  tests/test_gade_autonomous_action_policy.py
+24750e7bfb86d69bae77cfc66e19101bb9b5f5fb9d4480984f6fc9ffb818e950  tests/test_gade_advanced_home_contract.py
+70cfde98fc4e4954415a855f4af76159a8a745b63471103af40d565478afdbda  tests/test_gade_home_l4_contract_worker.py
+170957486f6ba7dbba085236a6e5f14369e20fcf2067271deacfb89ef1de4db7  evidence/engineering/2026-10-23-trusted-target-identity.md
+72110f5b68d23caf34ec6db5ad1213d248401aadf32d2177371381cbda93cfc4  evidence/engineering/2026-10-23-autonomous-policy-v1.md
+6b0c008899247acfbb50d6f6126368dd2a92b3b255ae3de55c10ceb4fc309375  C:\Users\黃崧瑋\Documents\伺服頭骨\03 專案（Projects）\M2A 專案（M2A）\M2A 建置歷史（M2A Build History）.md
+406a9a53b72bbcdfb590bd847740c7deba7a8293a94d4588d15614787a9ad7db  C:\Users\黃崧瑋\Documents\伺服頭骨\03 專案（Projects）\M2A 專案（M2A）\M2A 已知問題（M2A Known Issues）.md
+90907251f66569a62933c6b31945564a62bc7c14daad319a5e690b11d3aecbab  C:\Users\黃崧瑋\Documents\伺服頭骨\03 專案（Projects）\M2A 專案（M2A）\M2A 執行手冊（M2A Runbook）.md
+1b45987c925294439b7978658686e2e534bdf14148e35a593c962bcc83d29db9  C:\Users\黃崧瑋\Documents\伺服頭骨\03 專案（Projects）\M2A 專案（M2A）\報告（M2A GADE Boundary Experiment Design 20260820）.md

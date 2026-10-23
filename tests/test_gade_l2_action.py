@@ -25,6 +25,11 @@ TARGET = "10.56.66.119"
 PORT = 18080
 
 
+@pytest.fixture(autouse=True)
+def worker_replay_ledger(monkeypatch, tmp_path):
+    monkeypatch.setenv("KALI_WORKER_REPLAY_DB_PATH", str(tmp_path / "worker-replay.sqlite3"))
+
+
 def make_request(**overrides):
     correlation_id = overrides.pop("correlation_id", f"GADE-L2-{uuid4()}")
     parameters = canonical_action_parameters(

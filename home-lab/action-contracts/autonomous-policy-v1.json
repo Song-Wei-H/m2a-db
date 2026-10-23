@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "policy_id": "gade-home-autonomous-policy-v1",
+  "status": "CANDIDATE_DISABLED_BY_DEFAULT",
+  "environment": "HOME_LAB_EXPLORATORY",
+  "source_contract": "advanced-synthetic-v1.json",
+  "source_contract_sha256": "b4db3697666eb15deaa1c8fe27abcd39af8a2e5b087ca4018f4a35082afca212",
+  "l4_contract": "l4-synthetic-role-lease-v1.json",
+  "l4_contract_sha256": "6950692eb437c73d4d58690f05bd3dcb5ed788553db5eb38e44013ca3b1792b5",
+  "profile_policy_version": "m2a-attack-depth-v1",
+  "required_target_identity": "gade-l2-t1078",
+  "target_identity_binding": "integrity-hashed AuthorizationDecision snapshot bound to grant id + fresh independent verifier proof; endpoint/scope are additional constraints only",
+  "target_identity_proof_max_age_seconds": 60,
+  "target_identity_runtime_recheck": "required-before-worker-action",
+  "required_target": "127.0.0.1",
+  "required_scope": "127.0.0.1/32",
+  "maximum_grant_ttl_seconds": 60,
+  "actions": {
+    "lab.synthetic_node_discovery.v1": {
+      "decision": "ALLOW",
+      "tool": "lab_synthetic_node_discovery",
+      "depth": 6,
+      "path": "/lab/advanced/l6-discovery",
+      "execution_identity": "builtin:home-advanced:l6-discovery:127.0.0.1:18080:v1",
+      "required_evidence_types": ["registered_target", "decision_input"],
+      "approval_mode": "autonomous_policy_supersedes_individual_approval_for_this_action_only",
+      "effect": "fixed two-node synthetic topology",
+      "policy_interpretation": "read-only enumeration; no session or state change"
+    },
+    "lab.synthetic_canary_access.v1": {"decision": "DENY", "tool": "lab_synthetic_canary_access", "depth": 5, "path": "/lab/advanced/l5-canary", "effect": "non-secret canary identifier access", "reason": "not yet policy-reviewed", "approval_mode": "reject_until_converted"},
+    "lab.simulated_visibility_comparison.v1": {"decision": "DENY", "tool": "lab_simulated_visibility_comparison", "depth": 5, "path": "/lab/advanced/l5-visibility", "effect": "lab-only visibility mode comparison; no real control changed", "reason": "not yet policy-reviewed", "approval_mode": "reject_until_converted"},
+    "lab.synthetic_node_session.v1": {"decision": "DENY", "tool": "lab_synthetic_node_session", "depth": 6, "path": "/lab/advanced/l6-session", "effect": "fixed logical node session with separate source and destination event files", "reason": "not yet policy-reviewed", "approval_mode": "reject_until_converted"},
+    "lab.synthetic_collection.v1": {"decision": "DENY", "tool": "lab_synthetic_collection", "depth": 7, "path": "/lab/advanced/l7-collection", "effect": "fixed synthetic record set selection", "reason": "not yet policy-reviewed", "approval_mode": "reject_until_converted"},
+    "lab.local_c2_simulation.v1": {"decision": "DENY", "tool": "lab_local_c2_simulation", "depth": 7, "path": "/lab/advanced/l7-c2", "effect": "lab-only NOOP heartbeat and acknowledgement; no external C2", "reason": "not yet policy-reviewed", "approval_mode": "reject_until_converted"},
+    "lab.synthetic_receiver_transfer.v1": {"decision": "DENY", "tool": "lab_synthetic_receiver_transfer", "depth": 7, "path": "/lab/advanced/l7-transfer", "effect": "fixed synthetic payload digest to lab-local logical receiver; no external network", "reason": "not yet policy-reviewed", "approval_mode": "reject_until_converted"},
+    "lab.reversible_impact_simulation.v1": {"decision": "DENY", "tool": "lab_reversible_impact_simulation", "depth": 7, "path": "/lab/advanced/l7-impact", "effect": "reversible lab-only impact flag; no real service interruption", "reason": "not yet policy-reviewed", "approval_mode": "reject_until_converted"},
+    "lab.synthetic_role_lease.v1": {"decision": "DENY", "tool": "lab_synthetic_role_lease", "depth": 4, "path": "/lab/l4/role-lease", "effect": "synthetic reversible role lease; no OS privilege change", "reason": "not yet policy-reviewed", "approval_mode": "reject_until_converted"}
+  }
+}

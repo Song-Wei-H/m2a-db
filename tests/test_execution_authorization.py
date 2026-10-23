@@ -164,3 +164,151 @@ async def test_concurrent_single_use_authorization_allows_at_most_one_claim():
             return True
 
     assert sum(await asyncio.gather(claim_once(), claim_once())) == 1
+
+
+class ClaimStore:
+    """In-memory transaction/row-lock model; not a PostgreSQL concurrency proof."""
+    def __init__(self, tasks, authorization, target=None):
+        self.tasks = {task.id: task for task in tasks}
+        self.authorization = authorization
+        self.target = target or SimpleNamespace(id=authorization.target_id,
+                                                target="192.0.2.7", scope=authorization.scope)
+        self.locks = {}
+
+    def lock_for(self, key):
+        return self.locks.setdefault(key, asyncio.Lock())
+
+
+class ClaimSession:
+    def __init__(self, store):
+        self.store = store
+        self.held_locks = []
+        self.task = None
+
+    def begin(self):
+        session = self
+
+        class Transaction:
+            async def __aenter__(self):
+                return session
+
+            async def __aexit__(self, *_exc):
+                for lock in reversed(session.held_locks):
+                    lock.release()
+                session.held_locks.clear()
+
+        return Transaction()
+
+    async def get(self, model, row_id, with_for_update=False):
+        key = (model.__name__, row_id)
+        if with_for_update:
+            lock = self.store.lock_for(key)
+            await lock.acquire()
+            self.held_locks.append(lock)
+        if model.__name__ == "ToolTask":
+            self.task = self.store.tasks.get(row_id)
+            return self.task
+        if model.__name__ == "ExecutionAuthorization":
+            authorization = self.store.authorization
+            return authorization if authorization.id == row_id else None
+        if model.__name__ == "Target":
+            return self.store.target if self.store.target.id == row_id else None
+        return None
+
+    async def execute(self, _statement):
+        if (self.task is not None and self.task.status == "pending"
+                and self.task.approval_status in {"not_required", "approved"}):
+            self.task.status = "running"
+            return ClaimResult(self.task.id)
+        return ClaimResult(None)
+
+
+class ClaimResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one_or_none(self):
+        return self.value
+
+
+def _claim_task_row(task_id, *, target_id=7, action_id="nuclei.safe_scan.v1"):
+    return SimpleNamespace(id=task_id, target_id=target_id, status="pending",
+        approval_status="not_required", tool_name="nuclei_safe",
+        execution_authorization_id=44, action_id=action_id)
+
+
+def _claim_grant(*, expires_at=None, consumed_count=0):
+    return SimpleNamespace(id=44, target_id=7, action_id="nuclei.safe_scan.v1",
+        expires_at=expires_at or utcnow_naive() + timedelta(minutes=1),
+        scope="192.0.2.7/32", consumed_count=consumed_count, execution_limit=1)
+
+
+@pytest.mark.asyncio
+async def test_real_claim_path_allows_once_then_rejects_consumed_grant_replay():
+    grant = _claim_grant()
+    store = ClaimStore([_claim_task_row(1), _claim_task_row(2)], grant)
+
+    async with ClaimSession(store).begin() as first_db:
+        first = await _claim_task(first_db, 1)
+    async with ClaimSession(store).begin() as replay_db:
+        replay = await _claim_task(replay_db, 2)
+
+    assert first is True
+    assert replay is False
+    assert grant.consumed_count == 1
+    assert store.tasks[1].status == "running"
+    assert store.tasks[2].status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_claim_path_rejects_expired_or_replaced_target_action():
+    for task in (
+        _claim_task_row(3, target_id=8),
+        _claim_task_row(4, action_id="httpx.web_probe.v1"),
+    ):
+        grant = _claim_grant()
+        store = ClaimStore([task], grant)
+        async with ClaimSession(store).begin() as db:
+            claimed = await _claim_task(db, task.id)
+        assert claimed is False
+        assert grant.consumed_count == 0
+        assert task.status == "pending"
+
+    task = _claim_task_row(5)
+    grant = _claim_grant(expires_at=utcnow_naive() - timedelta(seconds=1))
+    store = ClaimStore([task], grant)
+    async with ClaimSession(store).begin() as db:
+        claimed = await _claim_task(db, task.id)
+    assert claimed is False
+    assert grant.consumed_count == 0
+    assert task.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_claim_path_rejects_target_scope_changed_after_grant_creation():
+    task = _claim_task_row(8)
+    grant = _claim_grant()
+    changed_target = SimpleNamespace(id=7, target="192.0.2.7", scope="192.0.2.0/24")
+    store = ClaimStore([task], grant, target=changed_target)
+
+    async with ClaimSession(store).begin() as db:
+        claimed = await _claim_task(db, task.id)
+
+    assert claimed is False
+    assert grant.consumed_count == 0
+    assert task.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_two_executors_claiming_one_grant_allow_at_most_one_in_mock_transaction_model():
+    grant = _claim_grant()
+    store = ClaimStore([_claim_task_row(6), _claim_task_row(7)], grant)
+
+    async def claim(task_id):
+        async with ClaimSession(store).begin() as db:
+            return await _claim_task(db, task_id)
+
+    results = await asyncio.gather(claim(6), claim(7))
+    assert sum(results) == 1
+    assert grant.consumed_count == 1
+    assert sum(task.status == "running" for task in store.tasks.values()) == 1

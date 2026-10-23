@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 cd /home/kali/m2a-worker-home
+umask 077
+export KALI_WORKER_REPLAY_DB_PATH=/home/kali/.local/state/m2a-worker/execution-replay.sqlite3
+mkdir -p "$(dirname "$KALI_WORKER_REPLAY_DB_PATH")"
 set -a
 . ./worker-secrets.env
 set +a

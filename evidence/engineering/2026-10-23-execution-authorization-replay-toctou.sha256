@@ -1,0 +1,4 @@
+94f066bece3616fcb54fa884815e6662b6965cb975ad9e21c91e5d9469ce4b40  2026-10-23-execution-authorization-replay-toctou.md
+dad117bb24d22bde572a294740e906223a568e0d6715e7a3a7ca3062f8d0c240  ../../worker/task_poller.py
+809a96631abd37c3687c8bcdc5c3b70446ae9208eb48ec5d1b53e50b03e839fd  ../../tests/test_execution_authorization.py
+7cf12c4da167893b292324fc84ba3614f79ae9f33c46bc964cf3f0907115e25b  ../../tests/test_gade_target_identity.py

@@ -176,6 +176,7 @@ async def run_remote_tool(ctx: TaskContext) -> ToolRunOutcome:
               or receipt.get("executed_parameters") != ctx.authorization_parameters
               or receipt.get("executed_action") != ctx.action_id
               or receipt.get("execution_identity") != ctx.execution_identity
+              or receipt.get("worker_replay_claim") != "PERSISTED_SINGLE_USE"
               or receipt.get("handler_invoked") is not True
               or receipt.get("execution_outcome") != application_status
               or not receipt.get("request_received_at_utc")

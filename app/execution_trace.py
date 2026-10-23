@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.execution_governance import parameter_hash
 from app.models import (AuthorizationDecision, DecisionProposal, DecisionScore,
                         ExecutionAuthorization, ToolResult, ToolTask)
+from app.target_identity import target_identity_binding_for_grant
 
 
 def evidence_ref(reference: str, content: dict, kind: str = "input_snapshot") -> dict:
@@ -78,6 +79,13 @@ def result_output(row) -> dict:
 
 
 def execution_request(ctx) -> dict:
+    target_identity_binding = None
+    if getattr(ctx, "action_id", None) == "lab.synthetic_node_discovery.v1":
+        from app.target_identity import target_identity_binding_for_grant
+        target_identity_binding = target_identity_binding_for_grant(
+            getattr(ctx, "authorization_decision", None),
+            getattr(ctx, "execution_authorization", None),
+        )
     return {"tool": ctx.tool_name, "target": ctx.host, "port": ctx.port,
             "protocol": ctx.protocol, "service": ctx.service, "action_id": ctx.action_id,
             "execution_identity": ctx.execution_identity,
@@ -87,7 +95,8 @@ def execution_request(ctx) -> dict:
             "request_id": getattr(ctx, "request_id", None),
             "correlation_id": getattr(ctx, "correlation_id", None),
             "template_id": getattr(ctx, "template_id", None),
-            "expected_worker_build_sha256": getattr(ctx, "expected_worker_build_sha256", None)}
+            "expected_worker_build_sha256": getattr(ctx, "expected_worker_build_sha256", None),
+            "target_identity_binding": target_identity_binding}
 
 
 def row_dict(row) -> dict | None:
@@ -137,6 +146,9 @@ async def trace_tool_result(db, result_id: int) -> dict[str, Any]:
                 or not evaluation_matches_grant(evaluation, grant)
                 or evaluation.record_hash != parameter_hash(evaluation_input(evaluation))):
             issues.append("authorization_evaluation_mismatch")
+        if grant and grant.authorization_source == "autonomous-policy:gade-home-autonomous-policy-v1":
+            if target_identity_binding_for_grant(evaluation, grant) is None:
+                issues.append("target_identity_binding_unverified")
     if task:
         if not task.execution_request or task.execution_request_hash != parameter_hash(task.execution_request):
             issues.append("execution_request_unverified")
@@ -151,6 +163,10 @@ async def trace_tool_result(db, result_id: int) -> dict[str, Any]:
                         or task.execution_request.get("authorization_parameters_hash") != grant.parameters_hash
                         or task.execution_request.get("execution_identity") != grant.execution_identity):
             issues.append("authorization_request_mismatch")
+        elif grant and grant.authorization_source == "autonomous-policy:gade-home-autonomous-policy-v1":
+            binding = target_identity_binding_for_grant(evaluation, grant) if evaluation else None
+            if (binding is None or task.execution_request.get("target_identity_binding") != binding):
+                issues.append("worker_request_target_identity_binding_mismatch")
         if grant and (task.target_id != grant.target_id or task.action_id != grant.action_id
                       or task.investigation_id != grant.investigation_id):
             issues.append("task_authorization_identity_mismatch")
@@ -183,6 +199,7 @@ async def trace_tool_result(db, result_id: int) -> dict[str, Any]:
                 or receipt.get("executed_action") != grant.action_id
                 or receipt.get("executed_parameters") != grant.canonical_parameters
                 or receipt.get("execution_identity") != grant.execution_identity
+                or receipt.get("worker_replay_claim") != "PERSISTED_SINGLE_USE"
                 or receipt.get("handler_invoked") is not True
                 or not receipt.get("request_received_at_utc")
                 or not receipt.get("handler_started_at_utc")

@@ -4,11 +4,9 @@ from __future__ import annotations
 from worker.remote_runner import run_remote_tool
 
 import asyncio
-import hashlib
 import logging
 import os
 from dataclasses import dataclass, replace
-from pathlib import Path
 from uuid import uuid4
 
 from sqlalchemy import and_, or_, select, update
@@ -27,6 +25,7 @@ from app.tool_task_constants import (
 )
 from app.tool_task_state import tool_task_status_values
 from app.execution_trace import execution_request, result_output
+from kali_worker.build_info import worker_build_sha256
 from worker.parsers.nmap_parser import parse_nmap_output
 from worker.tool_runner import TaskContext, run_tool
 from worker.safety import validate_task_execution
@@ -38,8 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 def _with_dispatch_correlation(ctx: TaskContext, template_id: str) -> TaskContext:
-    worker_source = Path(__file__).resolve().parents[1] / "kali_worker" / "app.py"
-    build_hash = hashlib.sha256(worker_source.read_bytes()).hexdigest()
+    build_hash = worker_build_sha256()
     correlation_id = os.environ.get("GADE_L1_CORRELATION_ID") or str(uuid4())
     return replace(ctx, request_id=str(uuid4()), correlation_id=correlation_id, template_id=template_id,
                    expected_worker_build_sha256=build_hash)
@@ -116,6 +114,9 @@ async def _claim_task(db: AsyncSession, task_id: int) -> bool:
             or authorization.expires_at <= utcnow_naive()
             or authorization.consumed_count >= authorization.execution_limit
         ):
+            return False
+        target = await db.get(Target, task.target_id)
+        if target is None or authorization.scope != (target.scope or target.target):
             return False
         authorization.consumed_count += 1
     result = await db.execute(

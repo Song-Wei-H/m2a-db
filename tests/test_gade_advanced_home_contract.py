@@ -69,7 +69,7 @@ async def test_depth_and_approval_gate_for_every_advanced_action(tool, spec):
         template_version=contracts.ACTION_TEMPLATES[action_id])
     params = contracts.canonical_action_parameters(action_id=action_id,
         target="127.0.0.1", port=18080, protocol="tcp", service="http")
-    for authorized_depth, expected in ((1, "DENY"), (3, "DENY"), (7, "PENDING")):
+    for authorized_depth, expected in ((1, "DENY"), (3, "DENY")):
         target = Target(id=17, target="127.0.0.1", target_type="ip", scope="127.0.0.1/32")
         target.authorization_depth = authorized_depth
         db = FakeSession(action)
@@ -84,22 +84,33 @@ async def test_depth_and_approval_gate_for_every_advanced_action(tool, spec):
             assert result.evaluation.contract_snapshot["reason_code"] == "ATTACK_DEPTH_EXCEEDED"
     target.authorization_depth = 7
     db = FakeSession(action)
-    approved = await evaluate_and_authorize(db, target=target, tool_name=tool,
+    at_ceiling = await evaluate_and_authorize(db, target=target, tool_name=tool,
         parameters=params, reason="fixed offline governance contract", confidence=1.0,
         provider="test", authorization_source="engineering",
-        human_approved_by="human-engineering-test", ttl_seconds=60,
         evidence_refs=context_evidence(target))
-    assert approved.evaluation.outcome == "ALLOW"
-    assert approved.authorization.execution_limit == 1
-    assert approved.authorization.human_approved_by == "human-engineering-test"
+    policy_managed = tool in contracts.HOME_ADVANCED_ACTIONS or action_id == "lab.synthetic_role_lease.v1"
+    if policy_managed:
+        assert at_ceiling.evaluation.outcome == "DENY"
+        assert at_ceiling.evaluation.contract_snapshot["reason_code"] in {
+            "AUTONOMOUS_ACTION_NOT_ALLOWLISTED", "AUTONOMOUS_POLICY_NOT_ENABLED",
+            "TARGET_IDENTITY_UNVERIFIED",
+        }
+    else:
+        assert at_ceiling.evaluation.outcome == "PENDING"
+    assert at_ceiling.authorization is None
+    assert not any(type(row).__name__ in {"ExecutionAuthorization", "ToolTask"} for row in db.added)
     db = FakeSession(action)
-    expired_contract = await evaluate_and_authorize(db, target=target, tool_name=tool,
+    unreviewed = await evaluate_and_authorize(db, target=target, tool_name=tool,
         parameters=params, reason="fixed offline governance contract", confidence=1.0,
         provider="test", authorization_source="engineering",
-        human_approved_by="human-engineering-test", ttl_seconds=300,
+        human_approved_by="legacy-approval-must-not-expand-candidate-policy", ttl_seconds=60,
         evidence_refs=context_evidence(target))
-    assert expired_contract.evaluation.outcome == "DENY"
-    assert expired_contract.authorization is None
+    if policy_managed:
+        assert unreviewed.evaluation.outcome == "DENY"
+        assert unreviewed.authorization is None
+    else:
+        assert unreviewed.evaluation.outcome == "ALLOW"
+        assert unreviewed.authorization.human_approved_by == "legacy-approval-must-not-expand-candidate-policy"
 
 
 def test_worker_advanced_capability_disabled_until_explicit_flag(monkeypatch):

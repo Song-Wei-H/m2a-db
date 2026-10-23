@@ -13,6 +13,7 @@ import subprocess
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
@@ -25,12 +26,15 @@ from app.action_contracts import (
     HOME_ADVANCED_ACTIONS,
     nuclei_fixed_argv,
 )
+from app.target_identity import get_configured_target_identity_verifier, verify_runtime_target_identity
+from kali_worker.build_info import worker_build_sha256
+from kali_worker.replay_ledger import ReplayLedgerError, claim_authorization_once
 
 app = FastAPI(title="M2A Kali Worker", version="evidence-tools-v1")
 _authorized_argv: ContextVar[list[str] | None] = ContextVar("authorized_argv", default=None)
 _execution_context: ContextVar[dict[str, Any] | None] = ContextVar("execution_context", default=None)
 logger = logging.getLogger("kali_worker.execution")
-WORKER_BUILD_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+WORKER_BUILD_SHA256 = worker_build_sha256()
 
 ALLOWED_TOOLS = {
     "nmap_service", "httpx_basic", "nuclei_safe", "dirb_safe",
@@ -76,6 +80,7 @@ class ExecuteRequest(BaseModel):
     correlation_id: str | None = None
     template_id: str | None = None
     expected_worker_build_sha256: str | None = None
+    target_identity_binding: dict[str, Any] | None = None
 
 
 def _utc_now() -> str:
@@ -915,6 +920,41 @@ def execute(req: ExecuteRequest) -> dict[str, Any]:
         return reject(str(exc))
     except RuntimeError as exc:
         return reject(str(exc))
+    if req.action_id == "lab.synthetic_node_discovery.v1":
+        binding = req.target_identity_binding
+        scope = binding.get("scope") if isinstance(binding, dict) else None
+        target_record_id = binding.get("target_id") if isinstance(binding, dict) else None
+        runtime_target = SimpleNamespace(id=target_record_id, target=req.target, scope=scope)
+        identity_reason = verify_runtime_target_identity(
+            binding=binding, target=runtime_target, action_id=req.action_id,
+            execution_identity=req.execution_identity or "",
+            parameters_hash=req.authorization_parameters_hash or "",
+            authorization_id=req.authorization_id,
+            verifier=get_configured_target_identity_verifier(),
+        )
+        _log_execution_event("target_identity_check",
+                             outcome="DENY" if identity_reason else "ALLOW",
+                             reason_code=identity_reason or "TARGET_IDENTITY_MATCH",
+                             binding_sha256=(binding or {}).get("binding_sha256") if isinstance(binding, dict) else None)
+        if identity_reason:
+            return reject(identity_reason)
+    replay_claim = "NOT_GOVERNED"
+    if req.authorization_id is not None:
+        try:
+            claim_authorization_once(
+                os.environ.get("KALI_WORKER_REPLAY_DB_PATH"),
+                authorization_id=req.authorization_id,
+                task_id=req.task_id,
+                request_id=req.request_id or "",
+                request_hash=parameters_hash(req.model_dump()),
+            )
+        except ReplayLedgerError as exc:
+            _log_execution_event("authorization_replay_claim", outcome="DENY",
+                                 reason_code=exc.reason_code)
+            return reject(exc.reason_code)
+        replay_claim = "PERSISTED_SINGLE_USE"
+        _log_execution_event("authorization_replay_claim", outcome="ALLOW",
+                             reason_code="PERSISTED_SINGLE_USE")
     authorized_url = (req.authorization_parameters or {}).get("canonical_url")
     authorized_sni = (req.authorization_parameters or {}).get("sni")
     handlers = {
@@ -952,6 +992,7 @@ def execute(req: ExecuteRequest) -> dict[str, Any]:
         "request_id": req.request_id,
         "correlation_id": req.correlation_id,
         "task_id": req.task_id, "authorization_id": req.authorization_id,
+        "worker_replay_claim": replay_claim,
         "template_id": req.template_id,
         "request_hash": parameters_hash(req.model_dump()),
         "executed_action": req.action_id, "executed_parameters": observed,

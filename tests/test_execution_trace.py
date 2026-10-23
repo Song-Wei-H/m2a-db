@@ -18,8 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.action_contracts import ACTION_IDENTITIES, ACTION_TEMPLATES
 from app.execution_governance import evaluate_and_authorize, canonical_parameters, parameter_hash
-from app.execution_trace import (context_evidence, execution_request, trace_tool_result,
-                                 proposal_input, result_output, evaluation_matches_grant,
+from app.execution_trace import (context_evidence, evidence_ref, execution_request, trace_tool_result,
+                                 proposal_input, evaluation_input, result_output, evaluation_matches_grant,
                                  grant_contract)
 from app.models import (Base, Target, OpenPort, DecisionScore, DecisionProposal,
                         AuthorizationDecision, ExecutionAuthorization, ToolResult, ToolTask, ValidationAction)
@@ -27,6 +27,11 @@ from app.tool_task_writer import create_tool_task_if_not_exists
 from kali_worker.app import ExecuteRequest, WORKER_BUILD_SHA256, execute
 from worker.task_poller import _claim_task, _load_task_context, _persist_result
 from worker.tool_runner import ToolRunOutcome
+
+
+@pytest.fixture(autouse=True)
+def worker_replay_ledger(monkeypatch, tmp_path):
+    monkeypatch.setenv("KALI_WORKER_REPLAY_DB_PATH", str(tmp_path / "worker-replay.sqlite3"))
 
 
 def test_evaluation_snapshot_allows_policy_metadata_but_matches_entire_grant_contract():
@@ -149,6 +154,85 @@ async def test_legacy_worker_without_native_receipt_has_explicit_partial_marker(
     assert "legacy_worker_correlation_mismatch" not in trace["issues"]
     assert trace["native_worker_receipt_status"] == "NATIVE_WORKER_RECEIPT_UNAVAILABLE"
     assert trace["status"] == "PARTIAL"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("replay_claim", "expected_status"), [
+    ("PERSISTED_SINGLE_USE", "COMPLETE"),
+    (None, "PARTIAL"),
+])
+async def test_native_trace_requires_persisted_worker_replay_claim(replay_claim, expected_status):
+    action = "http_security_headers.collect.v1"
+    params = canonical_parameters(target="trace.example", port=443, protocol="tcp",
+                                  service="https", action_id=action)
+    request = {
+        "tool": "http_security_headers", "target": "trace.example", "port": 443,
+        "protocol": "tcp", "service": "https", "action_id": action,
+        "execution_identity": ACTION_IDENTITIES[action], "authorization_parameters": params,
+        "authorization_parameters_hash": parameter_hash(params), "task_id": 31,
+        "authorization_id": 41, "request_id": str(uuid4()), "correlation_id": str(uuid4()),
+        "template_id": ACTION_TEMPLATES[action], "expected_worker_build_sha256": "a" * 64,
+        "target_identity_binding": None,
+    }
+
+    def as_model_row(model, **values):
+        defaults = {column.name: None for column in model.__table__.columns}
+        return SimpleNamespace(**{**defaults, "__table__": model.__table__, **values})
+
+    grant = as_model_row(ExecutionAuthorization,
+        id=41, proposal_id=51, target_id=9, investigation_id="trace-inv",
+        action_id=action, canonical_parameters=params, parameters_hash=parameter_hash(params),
+        execution_identity=ACTION_IDENTITIES[action], template_version=ACTION_TEMPLATES[action],
+        validation_tier=1, scope={"target": "trace.example"}, execution_limit=1,
+        expires_at=None, authorization_source="gade-tier-policy")
+    proposal = as_model_row(DecisionProposal,
+        id=51, target_id=9, investigation_id="trace-inv", action_id=action,
+        canonical_parameters=params, evidence_refs=[evidence_ref("fixture:1", {"ok": True})],
+        raw_proposal={"selected_action": action}, provider="fixture", reason="offline fixture")
+    proposal.input_hash = parameter_hash(proposal_input(proposal))
+    evaluation = as_model_row(AuthorizationDecision,
+        id=61, proposal_id=51, authorization_id=41, outcome="ALLOW", reason="fixture",
+        policy_source="gade-tier-policy", contract_snapshot={
+            **grant_contract(grant), "depth_check": "PASS", "evidence_check": "PASS",
+            "approval_check": "PASS", "reason_code": None,
+        })
+    evaluation.record_hash = parameter_hash(evaluation_input(evaluation))
+    task = as_model_row(ToolTask,
+        id=31, target_id=9, investigation_id="trace-inv", action_id=action,
+        execution_authorization_id=41, execution_request=request,
+        execution_request_hash=parameter_hash(request), execution_audit={"worker_exchange": {}})
+    receipt = {
+        "request_hash": parameter_hash(request), "request_id": request["request_id"],
+        "correlation_id": request["correlation_id"], "template_id": request["template_id"],
+        "task_id": 31, "authorization_id": 41, "executed_action": action,
+        "executed_parameters": params, "execution_identity": ACTION_IDENTITIES[action],
+        "worker_replay_claim": replay_claim, "handler_invoked": True,
+        "request_received_at_utc": "2026-10-23T00:00:00Z",
+        "handler_started_at_utc": "2026-10-23T00:00:01Z",
+        "handler_completed_at_utc": "2026-10-23T00:00:02Z",
+        "worker_build_sha256": "a" * 64, "execution_outcome": "completed",
+        "execution_kind": "builtin_handler",
+    }
+    result = ToolResult(
+        id=71, target_id=9, tool_name="http_security_headers", success=True,
+        tool_task_id=31, investigation_id="trace-inv", action_id=action,
+        command="builtin:http_security_headers", raw_output="fixture", parsed_output={"ok": True},
+        execution_receipt=receipt,
+    )
+    result.output_hash = parameter_hash(result_output(result))
+
+    class ReadOnlyTraceDB:
+        async def get(self, model, object_id):
+            return {ToolResult: result, ToolTask: task, ExecutionAuthorization: grant,
+                    DecisionProposal: proposal}.get(model)
+
+        async def execute(self, _statement):
+            return SimpleNamespace(scalar_one_or_none=lambda: evaluation)
+
+    trace = await trace_tool_result(ReadOnlyTraceDB(), result.id)
+    assert trace["status"] == expected_status, trace["issues"]
+    if expected_status == "PARTIAL":
+        assert "authority_execution_mismatch" in trace["issues"]
 
 
 @pytest.mark.asyncio
