@@ -448,3 +448,33 @@ def test_l3_worker_rejects_parameter_drift_before_network(monkeypatch):
     body = TestClient(worker.app).post("/execute", json=payload).json()
     assert body["status"] == "rejected"
     assert body["reason"] == "authorization parameter identity mismatch"
+
+
+def test_l3_worker_rejects_substantive_script_content_tampering_before_network(monkeypatch, tmp_path):
+    source_script = Path(__file__).resolve().parents[1] / "lab" / "mode-b-target" / "l3_execution_task.py"
+    original = source_script.read_bytes()
+    assert hashlib.sha256(original).hexdigest() == SCRIPT_SHA
+
+    tampered = original.replace(b"sum((6, 7)) * 3", b"sum((6, 7)) * 4", 1)
+    assert tampered != original
+    tampered_script = tmp_path / "l3_execution_task.py"
+    tampered_script.write_bytes(tampered)
+    tampered_sha = hashlib.sha256(tampered_script.read_bytes()).hexdigest()
+    assert tampered_sha != SCRIPT_SHA
+
+    monkeypatch.setenv("KALI_WORKER_PROFILE", "gade-experiment")
+    monkeypatch.setenv("KALI_WORKER_ENFORCE_TARGET_SCOPE", "true")
+    monkeypatch.setenv("KALI_WORKER_ALLOWED_SCOPES", f"{TARGET}/32")
+    monkeypatch.setenv("KALI_WORKER_ALLOWED_TOOLS", TOOL)
+    monkeypatch.setattr(
+        worker.http.client, "HTTPConnection",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("network must not be reached")),
+    )
+    payload = make_request()
+    payload["authorization_parameters"]["script_sha256"] = tampered_sha
+    payload["authorization_parameters_hash"] = parameter_hash(payload["authorization_parameters"])
+
+    response = TestClient(worker.app).post("/execute", json=payload)
+    assert response.status_code == 200
+    assert response.json()["status"] == "rejected"
+    assert response.json()["reason"] == "authorization parameter identity mismatch"
