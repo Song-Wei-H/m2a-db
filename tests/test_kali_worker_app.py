@@ -19,6 +19,24 @@ def worker_replay_ledger(monkeypatch, tmp_path):
     monkeypatch.setenv("KALI_WORKER_REPLAY_DB_PATH", str(tmp_path / "worker-replay.sqlite3"))
 
 
+@pytest.fixture
+def home_nuclei_template_root(monkeypatch, tmp_path):
+    """Use a native absolute test path while retaining the Home contract checks.
+
+    The production contract uses a Linux path. On Windows, Path.resolve() makes
+    an environment path drive-absolute while the imported contract path remains
+    root-relative, so this fixture relocates only the test's contract root.
+    """
+    template_path = tmp_path / "approved-home-nuclei" / Path(
+        worker.HOME_NUCLEI_TEMPLATE_PATH
+    ).name
+    template_path.parent.mkdir()
+    monkeypatch.setattr(worker, "HOME_LAB_EXPLORATORY", True)
+    monkeypatch.setattr(worker, "HOME_NUCLEI_TEMPLATE_PATH", str(template_path))
+    monkeypatch.setenv("GADE_NUCLEI_TEMPLATES_DIR", str(template_path.parent))
+    return template_path.parent
+
+
 def test_health_declares_evidence_tools_and_external_scope_policy():
     body = TestClient(worker.app).get("/health").json()
     assert body["status"] == "ok"
@@ -40,11 +58,15 @@ def test_isolated_profile_health_requires_and_reports_explicit_scope(monkeypatch
     assert body["allowed_scopes"] == ["172.29.4.10/32"]
     assert "dirb_safe" not in body["allowed_tools"]
     assert "nuclei_safe" not in body["allowed_tools"]
-    assert len(body["registered_tools"]) == 11
+    registered = set(body["registered_tools"])
+    allowed = set(body["allowed_tools"])
+    assert registered == ((worker.ALLOWED_TOOLS | worker.GADE_EXPERIMENT_ONLY_TOOLS)
+                          & worker.PROTECTED_ACTION_TOOLS)
+    assert allowed <= registered
+    assert "lab_synthetic_role_lease" in registered
     assert "lab_synthetic_role_lease" not in body["allowed_tools"]
     assert "lab_valid_account_access" in body["registered_tools"]
     assert "lab_fixed_python_execution" in body["registered_tools"]
-    assert len(body["allowed_tools"]) == 9
     assert "lab_fixed_python_execution" in body["allowed_tools"]
     assert body["unavailable_actions"][0]["action_id"] == "nuclei.safe_scan.v1"
 
@@ -66,26 +88,36 @@ def test_nuclei_action_is_unavailable_without_approved_bundle_and_never_calls_ha
     }
 
 
-def test_nuclei_bundle_manifest_must_be_nonempty_and_hash_exact(monkeypatch):
+def test_nuclei_bundle_manifest_must_be_nonempty_and_hash_exact(
+        monkeypatch, tmp_path, home_nuclei_template_root):
     monkeypatch.setenv("KALI_WORKER_PROFILE", "gade-experiment")
     monkeypatch.setenv("GADE_NUCLEI_ACTION_ENABLED", "true")
-    manifest = Path("test-approved-nuclei-manifest.json")
-    original_read_text = Path.read_text
-    def read_empty_manifest(path, *args, **kwargs):
-        if path == manifest:
-            return json.dumps({"approval_status": "APPROVED", "templates": []})
-        return original_read_text(path, *args, **kwargs)
-    monkeypatch.setattr(Path, "read_text", read_empty_manifest)
+    manifest = tmp_path / "test-approved-nuclei-manifest.json"
+    manifest.write_text(json.dumps({"approval_status": "APPROVED", "templates": []}),
+                        encoding="utf-8")
     monkeypatch.setenv("GADE_NUCLEI_TEMPLATE_MANIFEST", str(manifest))
     available, reason = worker.nuclei_action_state()
     assert available is False
     assert reason == "nuclei.safe_scan.v1 unavailable: approved template manifest is missing or empty"
 
 
-def test_nuclei_info_template_cannot_replace_critical_high_contract(monkeypatch):
+def test_nuclei_manifest_missing_is_rejected(monkeypatch, tmp_path, home_nuclei_template_root):
     monkeypatch.setenv("KALI_WORKER_PROFILE", "gade-experiment")
     monkeypatch.setenv("GADE_NUCLEI_ACTION_ENABLED", "true")
-    manifest = Path("proposed-info-template-manifest.json")
+    manifest = tmp_path / "absent-approved-nuclei-manifest.json"
+    monkeypatch.setenv("GADE_NUCLEI_TEMPLATE_MANIFEST", str(manifest))
+
+    available, reason = worker.nuclei_action_state()
+
+    assert available is False
+    assert reason == "nuclei.safe_scan.v1 unavailable: approved template manifest cannot be verified"
+
+
+def test_nuclei_info_template_cannot_replace_critical_high_contract(
+        monkeypatch, tmp_path, home_nuclei_template_root):
+    monkeypatch.setenv("KALI_WORKER_PROFILE", "gade-experiment")
+    monkeypatch.setenv("GADE_NUCLEI_ACTION_ENABLED", "true")
+    manifest = tmp_path / "proposed-info-template-manifest.json"
     payload = {
         "approval_status": "APPROVED",
         "severity_selector": "critical,high",
@@ -93,16 +125,41 @@ def test_nuclei_info_template_cannot_replace_critical_high_contract(monkeypatch)
         "runtime_loaded_count": 1,
         "templates": [{"path": "http/header.yaml", "severity": "info", "sha256": "0" * 64}],
     }
-    original_read_text = Path.read_text
-    def read_info_manifest(path, *args, **kwargs):
-        if path == manifest:
-            return json.dumps(payload)
-        return original_read_text(path, *args, **kwargs)
-    monkeypatch.setattr(Path, "read_text", read_info_manifest)
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setenv("GADE_NUCLEI_TEMPLATE_MANIFEST", str(manifest))
     available, reason = worker.nuclei_action_state()
     assert available is False
     assert reason == "nuclei.safe_scan.v1 unavailable: template severity is outside the fixed critical,high selector"
+
+
+def test_nuclei_home_manifest_rejects_unapproved_template_path(
+        monkeypatch, tmp_path, home_nuclei_template_root):
+    monkeypatch.setenv("KALI_WORKER_PROFILE", "gade-experiment")
+    monkeypatch.setenv("GADE_NUCLEI_ACTION_ENABLED", "true")
+    approved_source = (Path(__file__).resolve().parents[1] / "home-lab" / "nuclei-templates"
+                       / "gade-home-exposed-backup-index.yaml")
+    approved_bytes = approved_source.read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(approved_bytes).hexdigest() == worker.HOME_NUCLEI_TEMPLATE_SHA256
+    unapproved_name = "alternate-template-name.yaml"
+    (home_nuclei_template_root / unapproved_name).write_bytes(approved_bytes)
+    manifest = tmp_path / "unapproved-path-manifest.json"
+    manifest.write_text(json.dumps({
+        "approval_status": "APPROVED",
+        "severity_selector": "critical,high",
+        "selection_mode": "complete-severity-selector",
+        "runtime_loaded_count": 1,
+        "templates": [{
+            "path": unapproved_name,
+            "severity": "high",
+            "sha256": hashlib.sha256(approved_bytes).hexdigest(),
+        }],
+    }), encoding="utf-8")
+    monkeypatch.setenv("GADE_NUCLEI_TEMPLATE_MANIFEST", str(manifest))
+
+    available, reason = worker.nuclei_action_state()
+
+    assert available is False
+    assert reason == "nuclei.safe_scan.v1 unavailable: home template differs from Action Contract"
 
 
 def test_isolated_profile_fails_closed_when_scope_is_missing(monkeypatch):
@@ -150,6 +207,26 @@ def test_isolated_profile_rejects_tool_without_formal_action_contract(monkeypatc
     })
     assert response.json() == {
         "status": "rejected", "reason": "tool not allowed", "tool": "dirb_safe",
+    }
+
+
+def test_registered_but_disallowed_home_action_never_reaches_handler(monkeypatch):
+    monkeypatch.setenv("KALI_WORKER_PROFILE", "gade-experiment")
+    monkeypatch.setenv("KALI_WORKER_ENFORCE_TARGET_SCOPE", "true")
+    monkeypatch.setenv("KALI_WORKER_ALLOWED_SCOPES", "172.29.4.10/32")
+    monkeypatch.setenv("GADE_L4_SYNTHETIC_ENABLED", "false")
+    health = TestClient(worker.app).get("/health").json()
+    assert "lab_synthetic_role_lease" in health["registered_tools"]
+    assert "lab_synthetic_role_lease" not in health["allowed_tools"]
+    monkeypatch.setattr(worker, "run_lab_synthetic_role_lease", lambda *args, **kwargs: pytest.fail(
+        "registered but disallowed action reached its handler"))
+
+    response = TestClient(worker.app).post("/execute", json={
+        "tool": "lab_synthetic_role_lease", "target": "172.29.4.10", "port": 18080,
+    })
+
+    assert response.json() == {
+        "status": "rejected", "reason": "tool not allowed", "tool": "lab_synthetic_role_lease",
     }
 
 
@@ -256,8 +333,16 @@ def test_nuclei_worker_executes_exact_authorized_identity(monkeypatch):
         "authorization_parameters_hash": parameter_hash(parameters),
     }).json()
     assert body["status"] == "completed"
-    assert body["command"].split() == ["nuclei", "-u", "https://192.0.2.10:443/", "-severity",
-        "critical,high", "-rl", "5", "-timeout", "5", "-retries", "0", "-no-color"]
+    expected_command = ["nuclei", "-u", "https://192.0.2.10:443/"]
+    if worker.HOME_LAB_EXPLORATORY:
+        assert worker.HOME_NUCLEI_TEMPLATE_PATH == (
+            "/home/kali/gade-approved-nuclei/gade-home-exposed-backup-index.yaml")
+        expected_command += ["-t", "/home/kali/gade-approved-nuclei/gade-home-exposed-backup-index.yaml"]
+    expected_command += ["-severity", "critical,high", "-rl", "5", "-timeout", "5",
+                         "-retries", "0", "-no-color"]
+    if worker.HOME_LAB_EXPLORATORY:
+        expected_command += ["-duc", "-ni", "-auth=false"]
+    assert body["command"].split() == expected_command
 
 
 def test_governed_builtin_receipt_correlates_request_and_records_application_failure(monkeypatch):

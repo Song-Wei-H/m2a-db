@@ -1,10 +1,13 @@
 """The approved home-only Nuclei bundle is a single immutable safe template."""
 
 import json
+import hashlib
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from app import action_contracts as contracts
 from kali_worker import app as worker
@@ -15,15 +18,39 @@ from worker.parsers.nuclei_parser import parse_nuclei_output
 ROOT = Path(__file__).resolve().parents[1] / "home-lab"
 
 
-def test_approved_home_bundle_is_hash_exact_and_single_template(monkeypatch):
+@pytest.fixture
+def approved_home_bundle(monkeypatch, tmp_path):
+    manifest = json.loads((ROOT / "approved-nuclei-templates.json").read_text(encoding="utf-8"))
+    template_name = manifest["templates"][0]["path"]
+    template_source = ROOT / "nuclei-templates" / template_name
+    template_bytes = template_source.read_bytes().replace(b"\r\n", b"\n")
+    assert hashlib.sha256(template_bytes).hexdigest() == contracts.HOME_NUCLEI_TEMPLATE_SHA256
+    template_dir = tmp_path / "approved-home-nuclei"
+    template_dir.mkdir()
+    template = template_dir / template_name
+    template.write_bytes(template_bytes)
+    manifest_path = tmp_path / "approved-home-nuclei.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    # Home mode uses a fixed Linux path in production. Use an equivalent native
+    # absolute path in this fixture so Windows Path.resolve semantics are tested
+    # without changing any production restriction.
+    monkeypatch.setattr(worker, "HOME_LAB_EXPLORATORY", True)
+    monkeypatch.setattr(worker, "HOME_NUCLEI_TEMPLATE_PATH", str(template))
+    monkeypatch.setenv("KALI_WORKER_PROFILE", "gade-experiment")
+    monkeypatch.setenv("GADE_HOME_LAB_EXPLORATORY", "1")
+    monkeypatch.setenv("GADE_NUCLEI_ACTION_ENABLED", "true")
+    monkeypatch.setenv("GADE_NUCLEI_TEMPLATE_MANIFEST", str(manifest_path))
+    monkeypatch.setenv("GADE_NUCLEI_TEMPLATES_DIR", str(template_dir))
+    return manifest, template, manifest_path
+
+
+def test_approved_home_bundle_is_hash_exact_and_single_template(monkeypatch, approved_home_bundle):
     manifest = json.loads((ROOT / "approved-nuclei-templates.json").read_text(encoding="utf-8"))
     assert manifest["approval_scope"] == "HOME_LAB_EXPLORATORY_B_ENGINEERING_ONLY"
     assert len(manifest["templates"]) == 1
     assert manifest["templates"][0]["path"] == "gade-home-exposed-backup-index.yaml"
-    monkeypatch.setenv("KALI_WORKER_PROFILE", "gade-experiment")
-    monkeypatch.setenv("GADE_NUCLEI_ACTION_ENABLED", "true")
-    monkeypatch.setenv("GADE_NUCLEI_TEMPLATE_MANIFEST", str(ROOT / "approved-nuclei-templates.json"))
-    monkeypatch.setenv("GADE_NUCLEI_TEMPLATES_DIR", str(ROOT / "nuclei-templates"))
+    assert approved_home_bundle[1].name == manifest["templates"][0]["path"]
     assert worker.nuclei_action_state() == (True, None)
 
 
@@ -54,19 +81,7 @@ def test_home_nuclei_identity_fits_existing_database_column():
     assert contracts.HOME_NUCLEI_TEMPLATE_SHA256 in identity
 
 
-def test_home_nuclei_manifest_must_match_contract_path_and_hash(monkeypatch, tmp_path):
-    template_dir = tmp_path / "approved"
-    template_dir.mkdir()
-    template = template_dir / "gade-home-exposed-backup-index.yaml"
-    template.write_bytes((ROOT / "nuclei-templates" / template.name).read_bytes())
-    manifest = tmp_path / "approved.json"
-    manifest.write_bytes((ROOT / "approved-nuclei-templates.json").read_bytes())
-    monkeypatch.setattr(worker, "HOME_LAB_EXPLORATORY", True)
-    monkeypatch.setattr(worker, "HOME_NUCLEI_TEMPLATE_PATH", str(template))
-    monkeypatch.setenv("KALI_WORKER_PROFILE", "gade-experiment")
-    monkeypatch.setenv("GADE_NUCLEI_ACTION_ENABLED", "true")
-    monkeypatch.setenv("GADE_NUCLEI_TEMPLATE_MANIFEST", str(manifest))
-    monkeypatch.setenv("GADE_NUCLEI_TEMPLATES_DIR", str(template_dir))
+def test_home_nuclei_manifest_must_match_contract_path_and_hash(monkeypatch, approved_home_bundle):
     assert worker.nuclei_action_state() == (True, None)
     monkeypatch.setattr(worker, "HOME_NUCLEI_TEMPLATE_SHA256", "0" * 64)
     available, reason = worker.nuclei_action_state()
