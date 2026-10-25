@@ -44,6 +44,9 @@ class TaskContext:
     correlation_id: str | None = None
     template_id: str | None = None
     expected_worker_build_sha256: str | None = None
+    validation_tier: int | None = None
+    dispatch_authorization_binding: dict | None = None
+    dispatch_permit: dict | None = None
 
 
 @dataclass

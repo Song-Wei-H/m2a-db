@@ -26,6 +26,14 @@ from app.action_contracts import (
     HOME_ADVANCED_ACTIONS,
     nuclei_fixed_argv,
 )
+from app.dispatch_permit import (
+    DispatchPermitError,
+    dispatch_permit_required,
+    get_dispatch_permit_verifier,
+    normalize_authority_decision,
+    permit_utcnow,
+    validate_permit_envelope,
+)
 from app.target_identity import get_configured_target_identity_verifier, verify_runtime_target_identity
 from kali_worker.build_info import worker_build_sha256
 from kali_worker.replay_ledger import ReplayLedgerError, claim_authorization_once
@@ -81,6 +89,9 @@ class ExecuteRequest(BaseModel):
     template_id: str | None = None
     expected_worker_build_sha256: str | None = None
     target_identity_binding: dict[str, Any] | None = None
+    target_id: int | None = None
+    validation_tier: int | None = None
+    dispatch_permit: dict[str, Any] | None = None
 
 
 def _utc_now() -> str:
@@ -869,6 +880,7 @@ def execute(req: ExecuteRequest) -> dict[str, Any]:
                        "correlation_id": req.correlation_id,
                        "authorization_id": req.authorization_id, "action_id": req.action_id,
                        "template_id": req.template_id,
+                       "dispatch_permit_id": (req.dispatch_permit or {}).get("permit_id"),
                        "expected_worker_build_sha256": req.expected_worker_build_sha256,
                        "target": req.target, "port": req.port}
     _log_execution_event("request_received", **request_context)
@@ -876,6 +888,33 @@ def execute(req: ExecuteRequest) -> dict[str, Any]:
     def reject(reason: str) -> dict[str, Any]:
         _log_execution_event("request_rejected", reason=reason)
         return {"status": "rejected", "reason": reason, "tool": req.tool}
+
+    def dispatch_gate(state: str, reason: str, *, admission_id: str | None = None) -> dict[str, Any]:
+        _log_execution_event("dispatch_permit_gate", outcome=state, reason_code=reason,
+                             admission_id=admission_id)
+        return {
+            "status": "rejected" if state == "DENIED" else "unknown",
+            "reason": None if state == "IN_FLIGHT" else reason,
+            "tool": req.tool,
+            "dispatch_authorization": {"state": state, "reason_code": reason,
+                                       "admission_id": admission_id},
+        }
+
+    try:
+        permit_required = dispatch_permit_required(req.action_id)
+    except DispatchPermitError as exc:
+        return dispatch_gate(exc.state, exc.reason_code)
+    if permit_required and req.dispatch_permit is None:
+        return dispatch_gate("DENIED", "DISPATCH_PERMIT_REQUIRED")
+    permit_id = None
+    permit_binding = None
+    permit_binding_sha256 = None
+    if req.dispatch_permit is not None:
+        try:
+            permit_id, permit_binding, permit_binding_sha256 = validate_permit_envelope(
+                req.dispatch_permit, req, now=permit_utcnow())
+        except DispatchPermitError as exc:
+            return dispatch_gate(exc.state, exc.reason_code)
 
     if req.tool == "nuclei_safe":
         nuclei_available, nuclei_reason = nuclei_action_state()
@@ -955,6 +994,25 @@ def execute(req: ExecuteRequest) -> dict[str, Any]:
         replay_claim = "PERSISTED_SINGLE_USE"
         _log_execution_event("authorization_replay_claim", outcome="ALLOW",
                              reason_code="PERSISTED_SINGLE_USE")
+
+    dispatch_admission_id = None
+    if permit_id is not None:
+        verifier = get_dispatch_permit_verifier()
+        if verifier is None:
+            return dispatch_gate("UNKNOWN", "DISPATCH_PERMIT_VERIFIER_UNAVAILABLE")
+        try:
+            authority_result = verifier.consume_permit(permit_id, permit_binding)
+        except DispatchPermitError as exc:
+            return dispatch_gate(exc.state, exc.reason_code)
+        except Exception:
+            return dispatch_gate("UNKNOWN", "DISPATCH_PERMIT_VERIFIER_UNAVAILABLE")
+        state, reason, dispatch_admission_id = normalize_authority_decision(authority_result)
+        if state != "IN_FLIGHT":
+            return dispatch_gate(state, reason)
+        if permit_binding_sha256 != req.dispatch_permit.get("binding_sha256"):
+            return dispatch_gate("DENIED", "DISPATCH_PERMIT_BINDING_HASH_MISMATCH")
+        _log_execution_event("dispatch_permit_gate", outcome="IN_FLIGHT",
+                             reason_code="DISPATCH_ADMITTED", admission_id=dispatch_admission_id)
     authorized_url = (req.authorization_parameters or {}).get("canonical_url")
     authorized_sni = (req.authorization_parameters or {}).get("sni")
     handlers = {
@@ -976,7 +1034,9 @@ def execute(req: ExecuteRequest) -> dict[str, Any]:
     request_token = _execution_context.set(request_context)
     handler_started_at = _utc_now()
     _log_execution_event("handler_started", request_received_at_utc=request_received_at,
-                         handler_started_at_utc=handler_started_at)
+                         handler_started_at_utc=handler_started_at,
+                         dispatch_admission_id=dispatch_admission_id,
+                         dispatch_authorization_state="IN_FLIGHT" if permit_id else "NOT_REQUIRED")
     try:
         result = handlers[req.tool]()
     except Exception as exc:
@@ -992,6 +1052,9 @@ def execute(req: ExecuteRequest) -> dict[str, Any]:
         "request_id": req.request_id,
         "correlation_id": req.correlation_id,
         "task_id": req.task_id, "authorization_id": req.authorization_id,
+        "dispatch_permit_id": permit_id,
+        "dispatch_admission_id": dispatch_admission_id,
+        "dispatch_admission_state": "IN_FLIGHT" if permit_id else "NOT_REQUIRED",
         "worker_replay_claim": replay_claim,
         "template_id": req.template_id,
         "request_hash": parameters_hash(req.model_dump()),

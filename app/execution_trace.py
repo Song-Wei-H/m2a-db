@@ -89,14 +89,17 @@ def execution_request(ctx) -> dict:
     return {"tool": ctx.tool_name, "target": ctx.host, "port": ctx.port,
             "protocol": ctx.protocol, "service": ctx.service, "action_id": ctx.action_id,
             "execution_identity": ctx.execution_identity,
+            "validation_tier": getattr(ctx, "validation_tier", None),
             "authorization_parameters": deepcopy(ctx.authorization_parameters),
             "authorization_parameters_hash": ctx.authorization_parameters_hash,
             "task_id": ctx.task_id, "authorization_id": getattr(ctx, "authorization_id", None),
+            "target_id": getattr(ctx, "target_id", None),
             "request_id": getattr(ctx, "request_id", None),
             "correlation_id": getattr(ctx, "correlation_id", None),
             "template_id": getattr(ctx, "template_id", None),
             "expected_worker_build_sha256": getattr(ctx, "expected_worker_build_sha256", None),
-            "target_identity_binding": target_identity_binding}
+            "target_identity_binding": target_identity_binding,
+            "dispatch_permit": deepcopy(getattr(ctx, "dispatch_permit", None))}
 
 
 def row_dict(row) -> dict | None:

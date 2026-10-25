@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     cve_query_safety_limit: int = 5000
     cve_report_candidate_budget: int = 50
     max_cve_validations_per_round: int = 3
+    # Empty by default so existing L1-L3 executions keep their current path.
+    # Enabling an Action here requires the same allowlist in M2A and Kali
+    # Worker plus an injected authoritative DispatchPermitVerifier. Missing
+    # verifier state is fail-closed for the opted-in Action.
+    dispatch_permit_required_actions: str = ""
 
     @property
     def allowed_scopes_list(self) -> list[str]:
@@ -54,5 +59,9 @@ class Settings(BaseSettings):
     @property
     def allowed_domain_suffixes_list(self) -> list[str]:
         return [s.strip().lower().lstrip(".") for s in self.allowed_domain_suffixes.split(",") if s.strip()]
+
+    @property
+    def dispatch_permit_required_actions_list(self) -> list[str]:
+        return [s.strip() for s in self.dispatch_permit_required_actions.split(",") if s.strip()]
 
 settings = Settings()

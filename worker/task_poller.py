@@ -7,6 +7,7 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass, replace
+from datetime import timezone
 from uuid import uuid4
 
 from sqlalchemy import and_, or_, select, update
@@ -25,6 +26,13 @@ from app.tool_task_constants import (
 )
 from app.tool_task_state import tool_task_status_values
 from app.execution_trace import execution_request, result_output
+from app.dispatch_permit import (
+    DispatchPermitError,
+    dispatch_permit_required,
+    get_dispatch_permit_verifier,
+    permit_utcnow,
+    validate_permit_issue,
+)
 from kali_worker.build_info import worker_build_sha256
 from worker.parsers.nmap_parser import parse_nmap_output
 from worker.tool_runner import TaskContext, run_tool
@@ -41,6 +49,128 @@ def _with_dispatch_correlation(ctx: TaskContext, template_id: str) -> TaskContex
     correlation_id = os.environ.get("GADE_L1_CORRELATION_ID") or str(uuid4())
     return replace(ctx, request_id=str(uuid4()), correlation_id=correlation_id, template_id=template_id,
                    expected_worker_build_sha256=build_hash)
+
+
+def _utc_iso(value) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def _dispatch_binding(ctx: TaskContext) -> dict:
+    source = ctx.dispatch_authorization_binding
+    if not isinstance(source, dict):
+        raise DispatchPermitError("UNKNOWN", "DISPATCH_AUTHORIZATION_BINDING_UNAVAILABLE")
+    required_values = (
+        "target_scope", "grant_scope", "target_scope_epoch", "grant_scope_epoch",
+        "grant_expires_at", "depth", "approval_required", "approval_status",
+    )
+    if any(source.get(key) is None for key in required_values):
+        raise DispatchPermitError("UNKNOWN", "AUTHORITATIVE_DISPATCH_BINDING_INCOMPLETE")
+    if not isinstance(source.get("target_scope_epoch"), int) or isinstance(source.get("target_scope_epoch"), bool):
+        raise DispatchPermitError("UNKNOWN", "AUTHORITATIVE_SCOPE_EPOCH_MISSING")
+    if not isinstance(source.get("grant_scope_epoch"), int) or isinstance(source.get("grant_scope_epoch"), bool):
+        raise DispatchPermitError("UNKNOWN", "GRANT_SCOPE_EPOCH_MISSING")
+    if source["target_scope"] != source["grant_scope"]:
+        raise DispatchPermitError("DENIED", "DISPATCH_SCOPE_MISMATCH")
+    if source["approval_required"]:
+        if source.get("approval_epoch") is None or source.get("grant_approval_epoch") is None:
+            raise DispatchPermitError("UNKNOWN", "AUTHORITATIVE_APPROVAL_EPOCH_MISSING")
+        if not isinstance(source.get("approval_epoch"), int) or isinstance(source.get("approval_epoch"), bool):
+            raise DispatchPermitError("UNKNOWN", "AUTHORITATIVE_APPROVAL_EPOCH_MISSING")
+        if not isinstance(source.get("grant_approval_epoch"), int) or isinstance(source.get("grant_approval_epoch"), bool):
+            raise DispatchPermitError("UNKNOWN", "GRANT_APPROVAL_EPOCH_MISSING")
+    if not ctx.authorization_id or not ctx.action_id or not ctx.execution_identity:
+        raise DispatchPermitError("UNKNOWN", "DISPATCH_AUTHORIZATION_IDENTITY_INCOMPLETE")
+    if not ctx.request_id or not ctx.correlation_id or not ctx.template_id:
+        raise DispatchPermitError("UNKNOWN", "DISPATCH_CORRELATION_INCOMPLETE")
+    binding = {
+        "schema_version": "gade-dispatch-permit-binding-v1",
+        "task_id": ctx.task_id,
+        "authorization_id": ctx.authorization_id,
+        "target_id": ctx.target_id,
+        "action_id": ctx.action_id,
+        "target": ctx.host,
+        "target_scope": source["target_scope"],
+        "grant_scope": source["grant_scope"],
+        "target_scope_epoch": source["target_scope_epoch"],
+        "grant_scope_epoch": source["grant_scope_epoch"],
+        "parameters_hash": ctx.authorization_parameters_hash,
+        "execution_identity": ctx.execution_identity,
+        "depth": source["depth"],
+        "grant_expires_at": source["grant_expires_at"],
+        "approval_required": source["approval_required"],
+        "approval_status": source["approval_status"],
+        "approval_epoch": source.get("approval_epoch"),
+        "grant_approval_epoch": source.get("grant_approval_epoch"),
+        "request_id": ctx.request_id,
+        "correlation_id": ctx.correlation_id,
+        "template_id": ctx.template_id,
+        "worker_build_sha256": ctx.expected_worker_build_sha256,
+    }
+    if any(binding.get(key) is None for key in (
+        "parameters_hash", "worker_build_sha256", "grant_expires_at", "depth"
+    )):
+        raise DispatchPermitError("UNKNOWN", "DISPATCH_AUTHORIZATION_BINDING_INCOMPLETE")
+    return binding
+
+
+async def _persist_dispatch_permit_request(ctx: TaskContext, binding_sha256: str) -> None:
+    request = execution_request(ctx)
+    try:
+        async with async_session() as db, db.begin():
+            task = await db.get(ToolTask, ctx.task_id, with_for_update=True)
+            if (task is None or task.status != RUNNING
+                    or task.execution_authorization_id != ctx.authorization_id
+                    or task.action_id != ctx.action_id):
+                raise DispatchPermitError("UNKNOWN", "DISPATCH_TASK_BINDING_CHANGED")
+            task.execution_request = request
+            task.execution_request_hash = parameter_hash(request)
+            audit = dict(task.execution_audit or {})
+            audit.update({
+                "stage": "dispatch_permit_issued",
+                "dispatch_authorization": {
+                    "grant_state": "CONSUMED",
+                    "permit_state": "ISSUED",
+                    "permit_id": (ctx.dispatch_permit or {}).get("permit_id"),
+                    "binding_sha256": binding_sha256,
+                    "handler_state": "NOT_STARTED",
+                },
+            })
+            task.execution_audit = audit
+    except DispatchPermitError:
+        raise
+    except Exception as exc:
+        raise DispatchPermitError("UNKNOWN", "DISPATCH_PERMIT_REQUEST_PERSIST_FAILED") from exc
+
+
+async def _prepare_dispatch_permit(ctx: TaskContext) -> TaskContext:
+    if not dispatch_permit_required(ctx.action_id):
+        return ctx
+    verifier = get_dispatch_permit_verifier()
+    if verifier is None:
+        raise DispatchPermitError("UNKNOWN", "DISPATCH_PERMIT_VERIFIER_UNAVAILABLE")
+    binding = _dispatch_binding(ctx)
+    try:
+        result = await verifier.issue_permit(binding)
+    except DispatchPermitError:
+        raise
+    except Exception as exc:
+        raise DispatchPermitError("UNKNOWN", "DISPATCH_PERMIT_ISSUER_UNAVAILABLE") from exc
+    issue = validate_permit_issue(result, binding, now=permit_utcnow())
+    envelope = {
+        "permit_id": issue.permit_id,
+        "expires_at": issue.expires_at,
+        "binding_sha256": issue.binding_sha256,
+        "binding": binding,
+    }
+    ctx = replace(ctx, dispatch_permit=envelope)
+    await _persist_dispatch_permit_request(ctx, issue.binding_sha256)
+    return ctx
 
 
 @dataclass(frozen=True)
@@ -500,8 +630,30 @@ async def execute_task(task_id: int) -> None:
                 **{**ctx.__dict__, "execution_identity": authorization.execution_identity,
                    "authorization_id": authorization.id,
                    "authorization_parameters": authorization.canonical_parameters,
-                   "authorization_parameters_hash": authorization.parameters_hash}
+                   "authorization_parameters_hash": authorization.parameters_hash,
+                   "validation_tier": authorization.validation_tier}
             )
+            target_row = await db.get(Target, task.target_id)
+            if target_row is None:
+                await db.execute(update(ToolTask).where(ToolTask.id == task.id).values(
+                    execution_audit={"stage": "pre-dispatch", "handler_invoked": False,
+                                     "reason": "Target missing while binding dispatch authorization"},
+                    **tool_task_status_values(RUNNING, REJECTED,
+                                              reject_reason="Target missing while binding dispatch authorization")
+                ))
+                return
+            ctx = replace(ctx, dispatch_authorization_binding={
+                "target_scope": target_row.scope or target_row.target,
+                "grant_scope": authorization.scope,
+                "target_scope_epoch": getattr(target_row, "authorization_epoch", None),
+                "grant_scope_epoch": getattr(authorization, "target_authorization_epoch", None),
+                "grant_expires_at": _utc_iso(authorization.expires_at),
+                "depth": authorization.validation_tier,
+                "approval_required": bool(task.approval_required),
+                "approval_status": task.approval_status,
+                "approval_epoch": getattr(task, "approval_epoch", None),
+                "grant_approval_epoch": getattr(authorization, "approval_epoch", None),
+            })
 
         template_conditions = [
             CommandTemplate.tool_name == ctx.tool_name,
@@ -558,6 +710,8 @@ async def execute_task(task_id: int) -> None:
             task_snapshot.approval_status,
         )
 
+        ctx = await _prepare_dispatch_permit(ctx)
+
         logger.info(
             "tool_task_id=%s request_id=%s template_id=%s executing tool=%s host=%s approval_status=%s",
             task_id,
@@ -569,6 +723,29 @@ async def execute_task(task_id: int) -> None:
         )
 
         outcome = await run_remote_tool(ctx)
+
+    except DispatchPermitError as exc:
+        logger.warning("tool_task_id=%s dispatch authorization %s: %s",
+                       task_id, exc.state, exc.reason_code)
+        await _fail_task(
+            task_snapshot,
+            exc.reason_code,
+            command=f"dispatch-permit:{ctx.action_id}",
+            worker_exchange={
+                "request_id": ctx.request_id,
+                "task_id": task_id,
+                "authorization_id": ctx.authorization_id,
+                "delivery": "not_sent",
+                "dispatch_authorization": {
+                    "state": exc.state,
+                    "reason_code": exc.reason_code,
+                    "grant_state": "CONSUMED",
+                    "permit_state": "NOT_ISSUED",
+                    "handler_state": "NOT_STARTED",
+                },
+            },
+        )
+        return
 
     except ValueError as exc:
         logger.warning("tool_task_id=%s rejected: %s", task_id, exc)

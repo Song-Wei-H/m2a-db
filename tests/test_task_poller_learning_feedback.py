@@ -186,6 +186,7 @@ async def test_execute_task_remote_timeout_marks_failed_and_writes_tool_result()
     fail_db.get = AsyncMock(return_value=failed_task)
 
     timeout_reason = "remote tool timeout after 300s: dirb_safe target=198.51.100.13 port=443"
+    remote_call = AsyncMock(side_effect=TimeoutError(timeout_reason))
 
     with patch(
         "worker.task_poller.async_session",
@@ -195,7 +196,7 @@ async def test_execute_task_remote_timeout_marks_failed_and_writes_tool_result()
         ],
     ), patch("worker.task_poller.validate_task_execution"), patch(
         "worker.task_poller.run_remote_tool",
-        AsyncMock(side_effect=TimeoutError(timeout_reason)),
+        remote_call,
     ), patch("worker.task_poller._record_learning_feedback", AsyncMock(return_value=False)), patch(
         "worker.task_poller.finalize_target_if_idle",
         AsyncMock(return_value=False),
@@ -218,6 +219,13 @@ async def test_execute_task_remote_timeout_marks_failed_and_writes_tool_result()
     assert failed_result.raw_output == timeout_reason
     assert failed_result.evidence == timeout_reason
     assert failed_result.parsed_output == {"status": "failed", "error": timeout_reason}
+    assert failed_task.execution_audit["worker_exchange"] == {
+        "request_id": remote_call.await_args.args[0].request_id,
+        "task_id": 86,
+        "delivery": "unknown",
+        "transport_error": timeout_reason,
+    }
+    remote_call.assert_awaited_once()
 
 
 @pytest.mark.asyncio

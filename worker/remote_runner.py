@@ -118,6 +118,13 @@ async def run_remote_tool(ctx: TaskContext) -> ToolRunOutcome:
                and not (isinstance(parsed_response, dict) and parsed_response.get("success") is False))
     receipt = data.get("execution_receipt") if valid_envelope else None
     trace_error = None
+    dispatch_authorization = data.get("dispatch_authorization") if valid_envelope else None
+    if (isinstance(dispatch_authorization, dict)
+            and dispatch_authorization.get("state") in {"DENIED", "UNKNOWN"}):
+        trace_error = (
+            f"Worker dispatch authorization {dispatch_authorization['state']}: "
+            f"{dispatch_authorization.get('reason_code') or 'reason unavailable'}"
+        )
     response_hash = parameter_hash(data if valid_envelope else response_text)
     response_output = ((data.get("raw_output") or data.get("output") or "")
                        if valid_envelope else response_text)
@@ -134,6 +141,7 @@ async def run_remote_tool(ctx: TaskContext) -> ToolRunOutcome:
         "worker_http_date": worker_date,
         "http_status": resp.status_code,
         "application_status": application_status,
+        "dispatch_authorization": data.get("dispatch_authorization") if valid_envelope else None,
         "receipt_present": isinstance(receipt, dict),
         "response_sha256": response_hash,
         "output_sha256": hashlib.sha256(str(response_output).encode("utf-8", errors="replace")).hexdigest(),
@@ -176,6 +184,10 @@ async def run_remote_tool(ctx: TaskContext) -> ToolRunOutcome:
               or receipt.get("executed_parameters") != ctx.authorization_parameters
               or receipt.get("executed_action") != ctx.action_id
               or receipt.get("execution_identity") != ctx.execution_identity
+              or (ctx.dispatch_permit is not None
+                  and receipt.get("dispatch_permit_id") != ctx.dispatch_permit.get("permit_id"))
+              or (ctx.dispatch_permit is not None
+                  and receipt.get("dispatch_admission_state") != "IN_FLIGHT")
               or receipt.get("worker_replay_claim") != "PERSISTED_SINGLE_USE"
               or receipt.get("handler_invoked") is not True
               or receipt.get("execution_outcome") != application_status
