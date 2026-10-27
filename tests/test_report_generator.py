@@ -153,6 +153,29 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
         normalized_output={"evidence_type": "http_service", "details": {"status_code": 200}},
         created_at=created_at,
     )
+    l2_normalized = row(
+        id=603, open_port_id=101, tool_result_id=302,
+        tool_name="lab_valid_account_access", evidence_type="synthetic_valid_account_access",
+        normalized_output={"evidence_type": "synthetic_valid_account_access", "details": {
+            "mitre_attack_technique": "T1078",
+            "interpretation": "fixed test-account access, not a vulnerability or exploit",
+        }}, created_at=created_at,
+    )
+    l3_normalized = row(
+        id=604, open_port_id=101, tool_result_id=303,
+        tool_name="lab_fixed_python_execution", evidence_type="synthetic_fixed_python_execution",
+        normalized_output={"evidence_type": "synthetic_fixed_python_execution", "details": {
+            "mitre_attack_technique": "T1059.006",
+            "interpretation": "fixed non-destructive lab script, not arbitrary code execution",
+        }}, created_at=created_at,
+    )
+    l4_analogy = row(
+        id=605, open_port_id=101, tool_result_id=304,
+        tool_name="lab_synthetic_role_lease", evidence_type="synthetic_role_lease",
+        normalized_output={"evidence_type": "synthetic_role_lease", "details": {
+            "mitre_attack_technique_analogy": "T1098",
+        }}, created_at=created_at,
+    )
     auto_loop_decision = row(
         id=701,
         round_number=2,
@@ -200,7 +223,7 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
                 FakeScalarResult([tool_task]),
                 FakeScalarResult([decision_score]),
                 FakeScalarResult([evidence_confidence]),
-            FakeScalarResult([normalized_result]),
+            FakeScalarResult([normalized_result, l2_normalized, l3_normalized, l4_analogy]),
             FakeScalarResult([auto_loop_decision]),
                 FakeScalarResult([learning_feedback]),
                 FakeScalarResult([cve_match]),
@@ -245,7 +268,25 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
             "severity": "high",
             "next_tool": "nuclei",
             "reason": "Exposed HTTPS service",
-        }
+        },
+        {
+            "decision_score_id": None, "normalized_result_id": 603,
+            "tool_result_id": 302, "source": "persisted_normalized_result",
+            "evidence_type": "synthetic_valid_account_access",
+            "classification": "controlled_lab_emulation",
+            "mitre_phase": "Initial Access", "mitre_technique": "T1078",
+            "risk_score": None, "severity": None, "next_tool": None,
+            "reason": "fixed test-account access, not a vulnerability or exploit",
+        },
+        {
+            "decision_score_id": None, "normalized_result_id": 604,
+            "tool_result_id": 303, "source": "persisted_normalized_result",
+            "evidence_type": "synthetic_fixed_python_execution",
+            "classification": "controlled_lab_emulation",
+            "mitre_phase": "Execution", "mitre_technique": "T1059.006",
+            "risk_score": None, "severity": None, "next_tool": None,
+            "reason": "fixed non-destructive lab script, not arbitrary code execution",
+        },
     ]
     assert report["risk_ranking"]["high_risk_ports"][0]["open_port_id"] == 101
     assert report["risk_ranking"]["highest_risk_decision"]["decision_score_id"] == 501
@@ -255,7 +296,7 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
     assert report["remediation"][0]["no_further_action"] is False
     assert report["remediation_guidance"] == [report["remediation"][0]["guidance"]]
     assert report["evidence_confidence"][0]["confidence_score"] == 0.93
-    assert report["normalized_results"] == [
+    assert report["normalized_results"][0] == (
         {
             "normalized_result_id": 602,
             "open_port_id": 101,
@@ -265,7 +306,8 @@ async def test_generate_target_report_success_after_removing_invalid_tool_run_ea
             "normalized_output": {"evidence_type": "http_service", "details": {"status_code": 200}},
             "created_at": created_at,
         }
-    ]
+    )
+    assert [item["normalized_result_id"] for item in report["normalized_results"]] == [602, 603, 604, 605]
     assert report["auto_loop_decisions"][0]["reason"] == "continue"
     assert report["learning_feedback"][0]["learning_score"] == 0.8
     assert report["learning_tool_score"] == [

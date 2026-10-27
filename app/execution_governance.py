@@ -98,9 +98,11 @@ async def propose_and_authorize(
         reason=reason, provider=provider, status="proposed")
     db.add(proposal)
     await db.flush()
-    if action.validation_tier == 3 and not human_approved_by:
+    if action.validation_tier >= 3 and not human_approved_by:
         proposal.status = "pending_human_approval"
         return GovernedAuthorization(proposal, None, action)
+    if action.validation_tier >= 4 and (not isinstance(ttl_seconds, int) or not 0 < ttl_seconds <= 60):
+        raise AuthorizationPolicyError("HIGH_DEPTH_GRANT_TTL_INVALID", "High-depth grant TTL must be 1–60 seconds")
     authorization = ExecutionAuthorization(proposal_id=proposal.id, investigation_id=investigation_id,
         target_id=target.id, action_id=action.action_id, canonical_parameters=parameters,
         parameters_hash=parameter_hash(parameters), execution_identity=action.execution_identity,

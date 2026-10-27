@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Iterable
@@ -21,6 +22,10 @@ from app.action_contracts import (  # noqa: E402
     ACTION_PARAMETER_SCHEMAS,
     ACTION_REQUIRED_ATTACK_DEPTH,
     ACTION_TEMPLATES,
+    HOME_LAB_EXPLORATORY,
+    HOME_ADVANCED_ACTIONS,
+    LAB_TARGET,
+    LAB_PORT,
     TOOL_BY_ACTION,
     canonical_action_parameters,
 )
@@ -47,6 +52,28 @@ LAB_ACTIONS = {
         "description": "Session-bound controlled execution emulation of the preinstalled lab Python script; expected marker 39.",
     },
 }
+if HOME_LAB_EXPLORATORY:
+    LAB_ACTIONS["nuclei.safe_scan.v1"] = {
+        "phase": "validation", "technique": None,
+        "description": "One approved GET /backup/ synthetic directory-index template; high is only a benchmark label, not a CVE or real-world severity.",
+    }
+if (HOME_LAB_EXPLORATORY and os.environ.get("GADE_L3_PROTOCOL") == "GADE_A_L4_ENGINEERING_V1"
+        and os.environ.get("GADE_L4_SYNTHETIC_ENABLED") == "1"):
+    LAB_ACTIONS["lab.synthetic_role_lease.v1"] = {
+        "phase": "persistence", "technique": "T1098",
+        "description": "Reversible synthetic application role lease; requires separate human approval, not real OS privilege escalation.",
+    }
+if (HOME_LAB_EXPLORATORY and os.environ.get("GADE_L3_PROTOCOL") == "GADE_A_L4_ENGINEERING_V1"
+        and os.environ.get("GADE_ADVANCED_SYNTHETIC_ENABLED") == "1"):
+    for _tool, (_action, _depth, _path) in HOME_ADVANCED_ACTIONS.items():
+        LAB_ACTIONS[_action] = {
+            "phase": {5: "credential_access", 6: "discovery", 7: "collection"}[_depth],
+            "technique": {"l5-canary": "T1552", "l5-visibility": "T1562",
+                "l6-discovery": "T1018", "l6-session": "T1021",
+                "l7-collection": "T1005", "l7-c2": "T1071",
+                "l7-transfer": "T1041", "l7-impact": "T1499"}[_path],
+            "description": f"Fixed home-only synthetic {_path} state; ATT&CK analogy only, individual approval required.",
+        }
 
 DECISION_KEYS = {"decision", "action_id", "rationale", "evidence_ids"}
 DECISIONS = {"PROPOSE_ACTION", "STOP", "NEED_MORE_EVIDENCE"}
@@ -57,10 +84,10 @@ def _parameter_schema(action_id: str) -> dict[str, Any]:
     existing = ACTION_PARAMETER_SCHEMAS.get(action_id)
     if existing is not None:
         return existing
-    if action_id not in {"http_security_headers.collect.v1", "httpx.web_probe.v1"}:
+    if action_id not in {"http_security_headers.collect.v1", "httpx.web_probe.v1", "nuclei.safe_scan.v1"}:
         raise ValueError(f"No reviewed parameter contract exists for {action_id}")
     fixed = canonical_action_parameters(
-        action_id=action_id, target="10.56.66.119", port=18080,
+        action_id=action_id, target=LAB_TARGET, port=LAB_PORT,
         protocol="tcp", service="http",
     )
     return {

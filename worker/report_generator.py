@@ -32,6 +32,41 @@ from app.vulnerability_queue import coverage_metrics
 __all__ = ["generate_target_report"]
 
 
+# Only these persisted, bounded lab observations carry a reviewed ATT&CK
+# mapping. Synthetic role leases and other analogies are intentionally absent.
+_LAB_NORMALIZED_MITRE = {
+    ("lab_valid_account_access", "synthetic_valid_account_access", "T1078"): "Initial Access",
+    ("lab_fixed_python_execution", "synthetic_fixed_python_execution", "T1059.006"): "Execution",
+}
+
+
+def _mitre_from_normalized_result(normalized: NormalizedResult) -> dict[str, Any] | None:
+    output = normalized.normalized_output
+    if not isinstance(output, dict) or not isinstance(output.get("details"), dict):
+        return None
+    if not isinstance(normalized.tool_result_id, int):
+        return None
+    details = output["details"]
+    technique = details.get("mitre_attack_technique")
+    phase = _LAB_NORMALIZED_MITRE.get((normalized.tool_name, normalized.evidence_type, technique))
+    if phase is None or output.get("evidence_type") != normalized.evidence_type:
+        return None
+    return {
+        "decision_score_id": None,
+        "normalized_result_id": normalized.id,
+        "tool_result_id": normalized.tool_result_id,
+        "source": "persisted_normalized_result",
+        "evidence_type": normalized.evidence_type,
+        "classification": "controlled_lab_emulation",
+        "mitre_phase": phase,
+        "mitre_technique": technique,
+        "risk_score": None,
+        "severity": None,
+        "next_tool": None,
+        "reason": details.get("interpretation"),
+    }
+
+
 def _risk_score(value: float | None) -> float:
     return float(value or 0)
 
@@ -889,6 +924,14 @@ async def generate_target_report(target_id: int) -> Dict[str, Any]:
                     "reason": decision.reason,
                 }
             )
+        for normalized in normalized_results:
+            mapping = _mitre_from_normalized_result(normalized)
+            if mapping is None:
+                continue
+            mitre_key = (mapping["mitre_phase"], mapping["mitre_technique"])
+            if mitre_key not in seen_mitre:
+                seen_mitre.add(mitre_key)
+                mitre_mapping.append(mapping)
 
         remediation = [
             _remediation_for_decision(decision, port_by_id.get(decision.open_port_id))

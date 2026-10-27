@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "environment": "HOME_LAB_EXPLORATORY",
+  "status": "STATIC_CANDIDATE_DISABLED_BY_DEFAULT",
+  "target": "127.0.0.1:18080",
+  "scope": "127.0.0.1/32",
+  "target_identity": "gade-l2-t1078",
+  "fixed_request": {"method": "POST", "body": {}, "authenticated_test_session_required": true, "run_id_header_required": true},
+  "governance": {"individual_human_approval_required": true, "grant_execution_limit": 1, "grant_ttl_seconds_max": 60, "scope_and_identity_fail_closed": true},
+  "actions": [
+    {"action_id": "lab.synthetic_canary_access.v1", "tool": "lab_synthetic_canary_access", "depth": 5, "path": "/lab/advanced/l5-canary", "mitre_analogy": "T1552", "effect": "non-secret canary identifier access"},
+    {"action_id": "lab.simulated_visibility_comparison.v1", "tool": "lab_simulated_visibility_comparison", "depth": 5, "path": "/lab/advanced/l5-visibility", "mitre_analogy": "T1562", "effect": "lab-only visibility mode comparison; no real control changed"},
+    {"action_id": "lab.synthetic_node_discovery.v1", "tool": "lab_synthetic_node_discovery", "depth": 6, "path": "/lab/advanced/l6-discovery", "mitre_analogy": "T1018", "effect": "fixed two-node synthetic topology"},
+    {"action_id": "lab.synthetic_node_session.v1", "tool": "lab_synthetic_node_session", "depth": 6, "path": "/lab/advanced/l6-session", "mitre_analogy": "T1021", "effect": "fixed logical node session with separate source and destination event files"},
+    {"action_id": "lab.synthetic_collection.v1", "tool": "lab_synthetic_collection", "depth": 7, "path": "/lab/advanced/l7-collection", "mitre_analogy": "T1005", "effect": "fixed synthetic record set selection"},
+    {"action_id": "lab.local_c2_simulation.v1", "tool": "lab_local_c2_simulation", "depth": 7, "path": "/lab/advanced/l7-c2", "mitre_analogy": "T1071", "effect": "lab-only NOOP heartbeat and acknowledgement; no external C2"},
+    {"action_id": "lab.synthetic_receiver_transfer.v1", "tool": "lab_synthetic_receiver_transfer", "depth": 7, "path": "/lab/advanced/l7-transfer", "mitre_analogy": "T1041", "effect": "fixed synthetic payload digest to lab-local logical receiver; no external network"},
+    {"action_id": "lab.reversible_impact_simulation.v1", "tool": "lab_reversible_impact_simulation", "depth": 7, "path": "/lab/advanced/l7-impact", "mitre_analogy": "T1499", "effect": "reversible lab-only impact flag; no real service interruption"}
+  ],
+  "evidence": "admin-key-gated /lab/admin/advanced-evidence with exact run/case/request identity",
+  "reset": "/lab/admin/reset",
+  "limitations": ["synthetic logical nodes are not separate network hosts", "logical receiver is not an independent service", "offline blue rules are not a live SIEM"]
+}

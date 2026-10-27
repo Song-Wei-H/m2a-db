@@ -24,6 +24,28 @@ MAX_BODY = 4096
 L3_SCRIPT = Path(__file__).with_name("l3_execution_task.py")
 L3_SCRIPT_ID = "gade-controlled-python-execution-v1"
 L3_MARKER_NAME = "execution-marker.json"
+L4_ROLE_STATE_NAME = "synthetic-role-lease.json"
+L4_ROLE = "synthetic-lab-operator"
+L4_LEASE_SECONDS = 300
+ADVANCED_STATE_NAME = "synthetic-advanced-state.json"
+ADVANCED_ACTIONS = {
+    "l5-canary": "l5_canary_accessed",
+    "l5-visibility": "l5_visibility_simulated",
+    "l6-discovery": "l6_topology_discovered",
+    "l6-session": "l6_session_established",
+    "l7-collection": "l7_collection_created",
+    "l7-c2": "l7_local_c2_acknowledged",
+    "l7-transfer": "l7_receiver_accepted",
+    "l7-impact": "l7_impact_simulated",
+}
+ADVANCED_INITIAL = {
+    "canary_accessed": False, "visibility_mode": "normal",
+    "discovered_nodes": [], "node_session_active": False,
+    "collected_ids": [], "c2_heartbeat_count": 0,
+    "receiver_digest": None, "impact_mode": "normal",
+    "completed_request_ids": [],
+    "completed_actions": [],
+}
 
 
 def utc_now() -> str:
@@ -32,7 +54,8 @@ def utc_now() -> str:
 
 class AuthState:
     def __init__(self, username: str, password: str, reset_key: str, ttl: int = 60,
-                 state_dir: str | Path | None = None):
+                 state_dir: str | Path | None = None, enable_l4: bool = False,
+                 enable_advanced: bool = False):
         if not username or len(password) < 24 or len(reset_key) < 24:
             raise ValueError("test account configuration is missing or too short")
         if not 1 <= ttl <= 600:
@@ -44,6 +67,26 @@ class AuthState:
         self.sessions: dict[str, tuple[float, str]] = {}
         self.state_dir = Path(state_dir or os.environ.get("GADE_L3_STATE_DIR", "/tmp/gade-l3"))
         self.marker_path = self.state_dir / L3_MARKER_NAME
+        self.l4_state_path = self.state_dir / L4_ROLE_STATE_NAME
+        self.l4_enabled = enable_l4
+        self.advanced_enabled = enable_advanced
+        self.advanced_state_path = self.state_dir / ADVANCED_STATE_NAME
+        self.node_log_paths = {node: self.state_dir / f"synthetic-{node}-events.jsonl"
+                               for node in ("node-alpha", "node-beta")}
+        self.advanced_state = dict(ADVANCED_INITIAL)
+        if enable_advanced and self.advanced_state_path.exists():
+            saved = json.loads(self.advanced_state_path.read_text(encoding="utf-8"))
+            if not isinstance(saved, dict) or set(saved) != set(ADVANCED_INITIAL):
+                raise ValueError("invalid synthetic advanced persisted state")
+            self.advanced_state = saved
+        self.l4_role_state: dict[str, Any] | None = None
+        if enable_l4 and self.l4_state_path.exists():
+            saved = json.loads(self.l4_state_path.read_text(encoding="utf-8"))
+            if (not isinstance(saved, dict) or saved.get("principal") != username
+                    or saved.get("role") != L4_ROLE
+                    or not isinstance(saved.get("expires_at_epoch"), (int, float))):
+                raise ValueError("invalid synthetic L4 persisted state")
+            self.l4_role_state = saved
         self.executions: dict[str, dict[str, Any]] = {}
         self.events: list[dict[str, Any]] = []
         self.lock = threading.RLock()
@@ -201,6 +244,164 @@ class AuthState:
         self.emit("protected_access_granted", request_id, case_id, session_fingerprint=digest[:12])
         return True
 
+    def establish_l4_role(self, run_id: str, token: str, request_id: str,
+                          case_id: str) -> dict[str, Any]:
+        if not self.l4_enabled or not RUN_RE.fullmatch(run_id):
+            raise ValueError("L4 synthetic action is unavailable")
+        with self.execution_lock:
+            if not self.authorize(token, request_id, case_id):
+                return {"outcome": "denied"}
+            with self.lock:
+                if self.l4_role_state is not None and self.l4_role_state["expires_at_epoch"] > time.time():
+                    raise RuntimeError("one synthetic role lease already exists; Reset is required")
+                state = {"run_id": run_id, "test_case_id": case_id,
+                         "request_id": request_id, "principal": self.username,
+                         "role": L4_ROLE, "created_utc": utc_now(),
+                         "expires_at_epoch": round(time.time() + L4_LEASE_SECONDS, 3),
+                         "simulation": True}
+                encoded = (json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n").encode()
+                self.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+                temporary = self.state_dir / f".{L4_ROLE_STATE_NAME}.{request_id}.tmp"
+                temporary.write_bytes(encoded)
+                os.replace(temporary, self.l4_state_path)
+                self.l4_role_state = state
+                state_sha = hashlib.sha256(encoded).hexdigest()
+            self.emit("l4_synthetic_persistence_created", request_id, case_id,
+                      run_id=run_id, state_sha256=state_sha, ttl_seconds=L4_LEASE_SECONDS)
+            self.emit("l4_test_role_granted", request_id, case_id,
+                      run_id=run_id, principal=self.username, role=L4_ROLE,
+                      state_sha256=state_sha)
+            return {"outcome": "completed", "run_id": run_id,
+                    "test_case_id": case_id, "request_id": request_id,
+                    "role": L4_ROLE, "state_sha256": state_sha,
+                    "ttl_seconds": L4_LEASE_SECONDS, "simulation": True}
+
+    def l4_role_access(self, token: str, request_id: str, case_id: str) -> bool:
+        if not self.l4_enabled or not self.authorize(token, request_id, case_id):
+            return False
+        with self.lock:
+            active = (self.l4_role_state is not None
+                      and self.l4_role_state["expires_at_epoch"] > time.time()
+                      and self.l4_state_path.is_file()
+                      and self.l4_role_state["principal"] == self.username)
+        self.emit("l4_role_resource_" + ("granted" if active else "denied"),
+                  request_id, case_id, role=L4_ROLE)
+        return active
+
+    def inspect_l4(self, run_id: str, case_id: str, request_id: str) -> dict[str, Any]:
+        with self.lock:
+            state = self.l4_role_state
+            matches = [event.copy() for event in self.events
+                       if event.get("run_id") == run_id
+                       and event.get("test_case_id") == case_id
+                       and event.get("request_id") == request_id]
+            present = (state is not None and self.l4_state_path.is_file()
+                       and state.get("run_id") == run_id
+                       and state.get("test_case_id") == case_id
+                       and state.get("request_id") == request_id
+                       and state["expires_at_epoch"] > time.time())
+            state_sha = hashlib.sha256(self.l4_state_path.read_bytes()).hexdigest() if present else None
+        return {"run_id": run_id, "test_case_id": case_id, "request_id": request_id,
+                "role_active": present, "state_sha256": state_sha,
+                "role": L4_ROLE if present else None, "events": matches,
+                "simulation": True}
+
+    def perform_advanced(self, action: str, run_id: str, token: str,
+                         request_id: str, case_id: str) -> dict[str, Any]:
+        """Apply one fixed synthetic state transition; no host/network side effects."""
+        if not self.advanced_enabled or action not in ADVANCED_ACTIONS or not RUN_RE.fullmatch(run_id):
+            raise ValueError("advanced synthetic action unavailable")
+        with self.execution_lock:
+            if not self.authorize(token, request_id, case_id):
+                return {"outcome": "denied"}
+            with self.lock:
+                if request_id in self.advanced_state["completed_request_ids"]:
+                    raise RuntimeError("synthetic request already executed")
+                if action in self.advanced_state["completed_actions"]:
+                    raise RuntimeError("synthetic action already executed; Reset required")
+                next_state = dict(self.advanced_state)
+                next_state["completed_request_ids"] = list(self.advanced_state["completed_request_ids"])
+                next_state["completed_actions"] = list(self.advanced_state["completed_actions"])
+                if action == "l5-canary":
+                    next_state["canary_accessed"] = True
+                    details = {"canary_id": "LAB-CANARY-NONSECRET-01"}
+                elif action == "l5-visibility":
+                    next_state["visibility_mode"] = "simulated_degraded_visibility"
+                    details = {"control_simulation": "degraded_visibility", "real_security_controls_changed": False}
+                elif action == "l6-discovery":
+                    next_state["discovered_nodes"] = ["node-alpha", "node-beta"]
+                    details = {"node_ids": ["node-alpha", "node-beta"]}
+                elif action == "l6-session":
+                    if next_state["discovered_nodes"] != ["node-alpha", "node-beta"]:
+                        return {"outcome": "precondition_missing"}
+                    next_state["node_session_active"] = True
+                    details = {"source_node": "node-alpha", "destination_node": "node-beta"}
+                elif action == "l7-collection":
+                    next_state["collected_ids"] = ["SYNTHETIC-RECORD-1", "SYNTHETIC-RECORD-2"]
+                    details = {"record_ids": list(next_state["collected_ids"])}
+                elif action == "l7-c2":
+                    next_state["c2_heartbeat_count"] += 1
+                    details = {"message": "LAB-NOOP", "ack": "LAB-NOOP-ACK"}
+                elif action == "l7-transfer":
+                    if next_state["collected_ids"] != ["SYNTHETIC-RECORD-1", "SYNTHETIC-RECORD-2"]:
+                        return {"outcome": "precondition_missing"}
+                    digest = hashlib.sha256(json.dumps(next_state["collected_ids"], sort_keys=True).encode()).hexdigest()
+                    next_state["receiver_digest"] = digest
+                    details = {"receiver_id": "lab-receiver-fixed", "payload_sha256": digest,
+                               "external_network_used": False}
+                else:
+                    next_state["impact_mode"] = "simulated_interruption"
+                    details = {"impact_mode": "simulated_interruption", "real_service_interrupted": False}
+                if len(next_state["completed_request_ids"]) >= 128:
+                    raise RuntimeError("advanced synthetic request ledger full; Reset required")
+                next_state["completed_request_ids"].append(request_id)
+                next_state["completed_actions"].append(action)
+                self.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+                encoded = (json.dumps(next_state, sort_keys=True, separators=(",", ":")) + "\n").encode()
+                temporary = self.state_dir / f".{ADVANCED_STATE_NAME}.{request_id}.tmp"
+                temporary.write_bytes(encoded)
+                os.replace(temporary, self.advanced_state_path)
+                self.advanced_state = next_state
+                state_sha = hashlib.sha256(encoded).hexdigest()
+            self.emit("advanced_action_requested", request_id, case_id,
+                      run_id=run_id, action=action, state_sha256=state_sha)
+            if action == "l6-session":
+                for node, event_name in (("node-alpha", "l6_source_session_opened"),
+                                         ("node-beta", "l6_destination_session_accepted")):
+                    row = {"time_utc": utc_now(), "event": event_name, "run_id": run_id,
+                           "test_case_id": case_id, "request_id": request_id,
+                           "state_sha256": state_sha, "node_id": node, "simulation": True}
+                    with self.node_log_paths[node].open("a", encoding="utf-8") as stream:
+                        stream.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    self.emit(event_name, request_id, case_id, run_id=run_id,
+                              action=action, state_sha256=state_sha, node_id=node,
+                              log_source=f"synthetic-{node}-file")
+            self.emit(ADVANCED_ACTIONS[action], request_id, case_id,
+                      run_id=run_id, action=action, state_sha256=state_sha, **details)
+            return {"outcome": "completed", "action": action, "run_id": run_id,
+                    "test_case_id": case_id, "request_id": request_id,
+                    "state_sha256": state_sha, "effect": details, "simulation": True}
+
+    def inspect_advanced(self, run_id: str, case_id: str, request_id: str) -> dict[str, Any]:
+        with self.lock:
+            events = [row.copy() for row in self.events if row.get("run_id") == run_id
+                      and row.get("test_case_id") == case_id and row.get("request_id") == request_id]
+            state = dict(self.advanced_state)
+            state_sha = hashlib.sha256(self.advanced_state_path.read_bytes()).hexdigest() if self.advanced_state_path.is_file() else None
+            node_events = {}
+            for node, path in self.node_log_paths.items():
+                node_events[node] = ([row for line in path.read_text(encoding="utf-8").splitlines()
+                                      if (row := json.loads(line)).get("run_id") == run_id
+                                      and row.get("test_case_id") == case_id
+                                      and row.get("request_id") == request_id]
+                                     if path.is_file() else [])
+        return {"run_id": run_id, "test_case_id": case_id, "request_id": request_id,
+                "state": state, "state_sha256": state_sha, "events": events,
+                "node_events": node_events,
+                "simulation": True}
+
     def reset(self, key: str, request_id: str, case_id: str) -> bool:
         if not hmac.compare_digest(key.encode("utf-8"), self._reset_key):
             self.emit("reset_rejected", request_id, case_id, outcome="denied")
@@ -216,11 +417,31 @@ class AuthState:
                     stale.unlink()
                     removed_temp_files.append(stale.name)
                 self.executions.clear()
+                prior_l4_state = self.l4_state_path.exists()
+                if prior_l4_state:
+                    self.l4_state_path.unlink()
+                self.l4_role_state = None
+                for stale in self.state_dir.glob(f".{L4_ROLE_STATE_NAME}.*.tmp"):
+                    stale.unlink()
+                prior_advanced_state = self.advanced_state_path.exists()
+                if prior_advanced_state:
+                    self.advanced_state_path.unlink()
+                self.advanced_state = dict(ADVANCED_INITIAL)
+                for stale in self.state_dir.glob(f".{ADVANCED_STATE_NAME}.*.tmp"):
+                    stale.unlink()
+                for path in self.node_log_paths.values():
+                    if path.exists():
+                        path.unlink()
             self.emit("state_reset", request_id, case_id, active_sessions=0,
                       l3_marker_cleared=not self.marker_path.exists(),
                       l3_temp_files_cleared=not any(self.state_dir.glob(f".{L3_MARKER_NAME}.*.tmp")),
                       prior_l3_marker_present=removed_marker,
-                      prior_l3_temp_file_count=len(removed_temp_files))
+                      prior_l3_temp_file_count=len(removed_temp_files),
+                      l4_role_cleared=not self.l4_state_path.exists(),
+                      prior_l4_role_present=prior_l4_state)
+            self.emit("advanced_state_reset", request_id, case_id,
+                      advanced_state_cleared=not self.advanced_state_path.exists(),
+                      prior_advanced_state_present=prior_advanced_state)
         return True
 
 
@@ -294,6 +515,48 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._reply(200, self.state.inspect_l3(run_id, case_id, request_id))
             return
+        if parsed.path == "/lab/admin/l4-evidence":
+            supplied_key = self.headers.get("X-Lab-Reset-Key", "")
+            if not hmac.compare_digest(supplied_key.encode("utf-8"), self.state._reset_key):
+                self._reply(403, {"error": "inspection_denied"})
+                return
+            query = parse_qs(parsed.query, strict_parsing=True)
+            run_id = query.get("run_id", [""])[0]
+            proof_case = query.get("case_id", [""])[0]
+            proof_request = query.get("request_id", [""])[0]
+            if not (RUN_RE.fullmatch(run_id) and CASE_RE.fullmatch(proof_case)
+                    and REQUEST_RE.fullmatch(proof_request)):
+                self._reply(400, {"error": "invalid_identity"})
+                return
+            self._reply(200, self.state.inspect_l4(run_id, proof_case, proof_request))
+            return
+        if parsed.path == "/lab/admin/advanced-evidence":
+            supplied_key = self.headers.get("X-Lab-Reset-Key", "")
+            if not hmac.compare_digest(supplied_key.encode("utf-8"), self.state._reset_key):
+                self._reply(403, {"error": "inspection_denied"})
+                return
+            query = parse_qs(parsed.query, strict_parsing=True)
+            run_id = query.get("run_id", [""])[0]
+            proof_case = query.get("case_id", [""])[0]
+            proof_request = query.get("request_id", [""])[0]
+            if not (RUN_RE.fullmatch(run_id) and CASE_RE.fullmatch(proof_case)
+                    and REQUEST_RE.fullmatch(proof_request)):
+                self._reply(400, {"error": "invalid_identity"})
+                return
+            self._reply(200, self.state.inspect_advanced(run_id, proof_case, proof_request))
+            return
+        if parsed.path == "/lab/l4/protected":
+            if not self.state.l4_enabled:
+                self._reply(404, {"error": "not_found"})
+                return
+            bearer = self.headers.get("Authorization", "")
+            token = bearer[7:] if bearer.startswith("Bearer ") else ""
+            if not self.state.l4_role_access(token, request_id, case_id):
+                self._reply(403, {"error": "synthetic_role_required"})
+                return
+            self._reply(200, {"resource": "lab-only-l4-role-resource", "role": L4_ROLE,
+                              "simulation": True})
+            return
         if parsed.path == "/lab/protected":
             pass
         else:
@@ -360,6 +623,46 @@ class Handler(BaseHTTPRequestHandler):
                               "exit_status": result["exit_status"],
                               "marker_sha256": result["marker_sha256"]})
             return
+        if self.path == "/lab/l4/role-lease":
+            if not self.state.l4_enabled:
+                self._reply(404, {"error": "not_found"})
+                return
+            run_id = self.headers.get("X-Run-ID", "")
+            if not RUN_RE.fullmatch(run_id) or body != {}:
+                self.state.emit("l4_role_lease_denied", request_id, case_id,
+                                reason="invalid_fixed_request")
+                self._reply(400, {"error": "invalid_request"})
+                return
+            bearer = self.headers.get("Authorization", "")
+            token = bearer[7:] if bearer.startswith("Bearer ") else ""
+            try:
+                result = self.state.establish_l4_role(run_id, token, request_id, case_id)
+            except RuntimeError:
+                self._reply(409, {"error": "synthetic_role_lease_exists"})
+                return
+            if result["outcome"] == "denied":
+                self._reply(401, {"error": "authentication_required"})
+                return
+            self._reply(200, result)
+            return
+        if self.path.startswith("/lab/advanced/"):
+            action = self.path.removeprefix("/lab/advanced/")
+            if not self.state.advanced_enabled or action not in ADVANCED_ACTIONS:
+                self._reply(404, {"error": "not_found"})
+                return
+            run_id = self.headers.get("X-Run-ID", "")
+            if not RUN_RE.fullmatch(run_id) or body != {}:
+                self._reply(400, {"error": "invalid_fixed_request"})
+                return
+            bearer = self.headers.get("Authorization", "")
+            token = bearer[7:] if bearer.startswith("Bearer ") else ""
+            try:
+                result = self.state.perform_advanced(action, run_id, token, request_id, case_id)
+            except RuntimeError:
+                self._reply(409, {"error": "request_already_executed"})
+                return
+            self._reply(200 if result["outcome"] == "completed" else 409, result)
+            return
         if self.path == "/lab/admin/reset":
             key = body.get("reset_key")
             if not isinstance(key, str) or not self.state.reset(key, request_id, case_id):
@@ -368,6 +671,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._reply(200, {"status": "reset", "active_sessions": 0,
                                   "l3_marker_cleared": not self.state.marker_path.exists(),
                                   "l3_temp_files_cleared": not any(self.state.state_dir.glob(f".{L3_MARKER_NAME}.*.tmp")),
+                                  "l4_role_cleared": not self.state.l4_state_path.exists(),
+                                  "advanced_state_cleared": not self.state.advanced_state_path.exists(),
                                   "test_case_id": case_id})
             return
         self.state.emit("route_not_found", request_id, case_id)
@@ -380,6 +685,8 @@ def main() -> None:
         os.environ.get("GADE_L2_TEST_PASSWORD", ""),
         os.environ.get("GADE_L2_RESET_KEY", ""),
         int(os.environ.get("GADE_L2_SESSION_TTL_SECONDS", "60")),
+        enable_l4=os.environ.get("GADE_L4_SYNTHETIC_ENABLED") == "1",
+        enable_advanced=os.environ.get("GADE_ADVANCED_SYNTHETIC_ENABLED") == "1",
     )
     state.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     server = ThreadingHTTPServer(("0.0.0.0", 8081), Handler)

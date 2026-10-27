@@ -33,11 +33,13 @@ def test_isolated_profile_health_requires_and_reports_explicit_scope(monkeypatch
     assert body["allowed_scopes"] == ["172.29.4.10/32"]
     assert "dirb_safe" not in body["allowed_tools"]
     assert "nuclei_safe" not in body["allowed_tools"]
-    assert len(body["registered_tools"]) == 10
+    assert len(body["registered_tools"]) == 11
     assert "lab_valid_account_access" in body["registered_tools"]
     assert "lab_fixed_python_execution" in body["registered_tools"]
+    assert "lab_synthetic_role_lease" in body["registered_tools"]
     assert len(body["allowed_tools"]) == 9
     assert "lab_fixed_python_execution" in body["allowed_tools"]
+    assert "lab_synthetic_role_lease" not in body["allowed_tools"]
     assert body["unavailable_actions"][0]["action_id"] == "nuclei.safe_scan.v1"
 
 
