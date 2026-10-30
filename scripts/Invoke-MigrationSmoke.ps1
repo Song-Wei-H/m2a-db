@@ -16,6 +16,8 @@ param(
 
     [string]$DatabaseUser,
 
+    [string]$PythonExecutable,
+
     [ValidatePattern('^[0-9a-f]{12}$')]
     [string]$HostOrchestratorRunId,
 
@@ -87,7 +89,11 @@ if ($Target.Database -ceq 'm2a_pentest' -or $Target.HostPort -ceq '15432') {
 }
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $InitDb = Join-Path $RepoRoot 'initdb'
-$Python = Join-Path $RepoRoot '.venv\Scripts\python.exe'
+$Python = if ([string]::IsNullOrWhiteSpace($PythonExecutable)) {
+    Join-Path $RepoRoot '.venv\Scripts\python.exe'
+} else {
+    $PythonExecutable
+}
 $RunId = '{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), ([guid]::NewGuid().ToString('N').Substring(0, 8))
 $LogDirectory = Join-Path $env:LOCALAPPDATA 'M2A\MigrationSmoke'
 $LogPath = Join-Path $LogDirectory ("{0}-{1}.log" -f $Mode.ToLowerInvariant(), $RunId)

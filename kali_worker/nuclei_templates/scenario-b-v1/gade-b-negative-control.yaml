@@ -1,0 +1,23 @@
+id: gade-b-negative-control-v1
+
+info:
+  name: GADE B synthetic negative control
+  author: GADE/M2A
+  severity: info
+  description: Fixed non-CVE control that verifies the backup-index marker is absent from the benign control route.
+  tags: gade,synthetic,b-negative,non-cve
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/lab/nuclei-negative-control"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - "Index of /backup/"
+        negative: true

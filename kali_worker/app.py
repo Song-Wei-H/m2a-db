@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import http.client
 import ipaddress
 import json
 import logging
 import os
+import re
+import secrets
 import shlex
 import socket
 import ssl
 import subprocess
+import time
+from app import action_contracts as action_contracts_module
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,9 +25,16 @@ from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict
 from app.action_contracts import (
     ACTION_IDENTITIES, ACTION_BY_TOOL, ACTION_TEMPLATES, canonical_action_parameters, PROTECTED_ACTION_TOOLS,
-    LAB_TARGET, LAB_PORT, HOME_LAB_EXPLORATORY, HOME_NUCLEI_TEMPLATE_PATH,
+    LAB_TARGET, LAB_PORT, HOME_LAB_EXPLORATORY, OFFICE_DOCKER_LAB, SYNTHETIC_LAB_PROFILE, HOME_NUCLEI_TEMPLATE_PATH,
     HOME_NUCLEI_TEMPLATE_SHA256,
     HOME_ADVANCED_ACTIONS,
+    SCENARIO_B_NUCLEI_PROFILE,
+    SCENARIO_B_NUCLEI_TEMPLATE_DIR,
+    SCENARIO_B_NUCLEI_MANIFEST_PATH,
+    SCENARIO_B_NUCLEI_TEMPLATE_FILES,
+    SCENARIO_B_NUCLEI_TEMPLATE_SHA256,
+    SCENARIO_B_NUCLEI_MANIFEST_SHA256,
+    SCENARIO_B_NUCLEI_BUNDLE_SHA256,
     nuclei_fixed_argv,
 )
 
@@ -31,6 +43,9 @@ _authorized_argv: ContextVar[list[str] | None] = ContextVar("authorized_argv", d
 _execution_context: ContextVar[dict[str, Any] | None] = ContextVar("execution_context", default=None)
 logger = logging.getLogger("kali_worker.execution")
 WORKER_BUILD_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+ACTION_CONTRACTS_BUILD_SHA256 = hashlib.sha256(
+    Path(action_contracts_module.__file__).read_bytes()
+).hexdigest()
 
 ALLOWED_TOOLS = {
     "nmap_service", "httpx_basic", "nuclei_safe", "dirb_safe",
@@ -40,7 +55,7 @@ ALLOWED_TOOLS = {
 # This action is visible only through the dedicated GADE experiment profile.
 # It is deliberately excluded from the shared Worker profile's allowlist.
 GADE_EXPERIMENT_ONLY_TOOLS = {"lab_valid_account_access", "lab_fixed_python_execution", "lab_synthetic_role_lease"}
-if HOME_LAB_EXPLORATORY:
+if SYNTHETIC_LAB_PROFILE:
     GADE_EXPERIMENT_ONLY_TOOLS.update(HOME_ADVANCED_ACTIONS)
 L2_LAB_TARGET = LAB_TARGET
 L2_LAB_PORT = LAB_PORT
@@ -163,9 +178,9 @@ def effective_allowed_tools() -> set[str]:
         available = (ALLOWED_TOOLS | GADE_EXPERIMENT_ONLY_TOOLS) & PROTECTED_ACTION_TOOLS
         if not nuclei_action_state()[0]:
             available = available - {"nuclei_safe"}
-        if not (HOME_LAB_EXPLORATORY and os.environ.get("GADE_L4_SYNTHETIC_ENABLED") == "1"):
+        if not (SYNTHETIC_LAB_PROFILE and os.environ.get("GADE_L4_SYNTHETIC_ENABLED") == "1"):
             available.discard("lab_synthetic_role_lease")
-        if not (HOME_LAB_EXPLORATORY and os.environ.get("GADE_ADVANCED_SYNTHETIC_ENABLED") == "1"):
+        if not (SYNTHETIC_LAB_PROFILE and os.environ.get("GADE_ADVANCED_SYNTHETIC_ENABLED") == "1"):
             available.difference_update(HOME_ADVANCED_ACTIONS)
         return available
     return ALLOWED_TOOLS
@@ -177,6 +192,62 @@ def nuclei_action_state() -> tuple[bool, str | None]:
         return True, None
     if os.environ.get("GADE_NUCLEI_ACTION_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
         return False, "nuclei.safe_scan.v1 unavailable: no approved template bundle is installed"
+
+    nuclei_profile = os.environ.get("GADE_NUCLEI_PROFILE", "").strip()
+    if nuclei_profile == "scenario-b-fixed-v1":
+        manifest_value = os.environ.get("GADE_NUCLEI_TEMPLATE_MANIFEST", SCENARIO_B_NUCLEI_MANIFEST_PATH)
+        templates_value = os.environ.get("GADE_NUCLEI_TEMPLATES_DIR", SCENARIO_B_NUCLEI_TEMPLATE_DIR)
+        manifest_path = Path(manifest_value)
+        templates_root = Path(templates_value)
+        if (manifest_path.resolve() != Path(SCENARIO_B_NUCLEI_MANIFEST_PATH).resolve()
+                or templates_root.resolve() != Path(SCENARIO_B_NUCLEI_TEMPLATE_DIR).resolve()):
+            return False, "nuclei.safe_scan.v1 unavailable: Scenario B bundle path differs from its fixed contract"
+        try:
+            manifest_bytes = manifest_path.read_bytes()
+            if hashlib.sha256(manifest_bytes).hexdigest() != SCENARIO_B_NUCLEI_MANIFEST_SHA256:
+                return False, "nuclei.safe_scan.v1 unavailable: Scenario B manifest hash differs from its fixed contract"
+            manifest = json.loads(manifest_bytes.decode("utf-8"))
+            if (manifest.get("schema_version") != 1
+                    or manifest.get("approval_status") != "APPROVED"
+                    or manifest.get("profile_id") != SCENARIO_B_NUCLEI_PROFILE
+                    or manifest.get("severity_selector") != "info"
+                    or manifest.get("selection_mode") != "exact-fixed-bundle"
+                    or manifest.get("runtime_loaded_count") != 2):
+                return False, "nuclei.safe_scan.v1 unavailable: Scenario B manifest metadata is invalid"
+            entries = manifest.get("templates")
+            if not isinstance(entries, list) or len(entries) != 2:
+                return False, "nuclei.safe_scan.v1 unavailable: Scenario B manifest must contain exactly two templates"
+            expected = set(SCENARIO_B_NUCLEI_TEMPLATE_FILES)
+            observed: dict[str, str] = {}
+            for entry in entries:
+                if not isinstance(entry, dict) or entry.get("severity") != "info":
+                    return False, "nuclei.safe_scan.v1 unavailable: Scenario B template entry is invalid"
+                relative = Path(str(entry.get("path", "")))
+                if relative.is_absolute() or ".." in relative.parts or relative.as_posix() not in expected:
+                    return False, "nuclei.safe_scan.v1 unavailable: Scenario B manifest contains an unreviewed path"
+                template_path = (templates_root / relative).resolve()
+                if templates_root.resolve() not in template_path.parents or not template_path.is_file():
+                    return False, "nuclei.safe_scan.v1 unavailable: Scenario B template file is missing"
+                actual_sha = hashlib.sha256(template_path.read_bytes()).hexdigest()
+                expected_sha = SCENARIO_B_NUCLEI_TEMPLATE_SHA256[relative.as_posix()]
+                if actual_sha != expected_sha or str(entry.get("sha256", "")).lower() != expected_sha:
+                    return False, "nuclei.safe_scan.v1 unavailable: Scenario B template hash differs from its fixed contract"
+                observed[relative.as_posix()] = actual_sha
+            actual_files = {path.relative_to(templates_root).as_posix() for path in templates_root.rglob("*")
+                            if path.is_file() and path.suffix.lower() in {".yaml", ".yml"}}
+            if actual_files != expected or set(observed) != expected:
+                return False, "nuclei.safe_scan.v1 unavailable: Scenario B template set differs from its fixed contract"
+            canonical_bundle = "".join(
+                f"{name}:{SCENARIO_B_NUCLEI_TEMPLATE_SHA256[name]}\n" for name in sorted(expected)
+            )
+            actual_bundle_sha = hashlib.sha256(canonical_bundle.encode("utf-8")).hexdigest()
+            if actual_bundle_sha != SCENARIO_B_NUCLEI_BUNDLE_SHA256:
+                return False, "nuclei.safe_scan.v1 unavailable: Scenario B bundle digest differs from its fixed contract"
+            return True, None
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            return False, "nuclei.safe_scan.v1 unavailable: Scenario B bundle cannot be verified"
+    if nuclei_profile:
+        return False, "nuclei.safe_scan.v1 unavailable: unknown fixed template profile"
 
     manifest_value = os.environ.get("GADE_NUCLEI_TEMPLATE_MANIFEST", "/opt/gade-build/approved-nuclei-templates.json")
     templates_root = Path(os.environ.get("GADE_NUCLEI_TEMPLATES_DIR", "/opt/nuclei-templates"))
@@ -331,6 +402,33 @@ def structured_result(tool: str, payload: dict[str, Any], *, success: bool = Tru
         "parsed_result": payload,
         "raw_output": json.dumps(payload, ensure_ascii=False, sort_keys=True),
         **({} if success else {"error": payload.get("error", "collector failed")}),
+    }
+
+
+def gade_office_worker_ingress_headers(password: str, method: str, path: str,
+                                       run_id: str, case_id: str,
+                                       request_id: str, *, now_epoch: int | None = None,
+                                       nonce: str | None = None) -> dict[str, str]:
+    """Create a one-request proof for the isolated office synthetic target."""
+    allowed_paths = {"/lab/l4/role-lease", "/lab/l4/protected"}
+    allowed_paths.update(f"/lab/advanced/{spec[2]}" for spec in HOME_ADVANCED_ACTIONS.values())
+    if (not password or method not in {"GET", "POST"} or path not in allowed_paths
+            or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,96}", run_id)
+            or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,96}", case_id)
+            or not re.fullmatch(r"[0-9a-f-]{36}", request_id)):
+        raise ValueError("fixed office Worker ingress identity is invalid")
+    timestamp = str(int(time.time()) if now_epoch is None else now_epoch)
+    request_nonce = nonce or secrets.token_hex(16)
+    if not re.fullmatch(r"[0-9a-f]{32}", request_nonce):
+        raise ValueError("fixed office Worker ingress nonce is invalid")
+    key = hmac.new(password.encode("utf-8"),
+                   b"gade-office-worker-ingress-key-v1", hashlib.sha256).digest()
+    canonical = "\n".join((method, path, run_id, case_id, request_id, timestamp, request_nonce))
+    signature = hmac.new(key, canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+    return {
+        "X-GADE-Worker-Timestamp": timestamp,
+        "X-GADE-Worker-Nonce": request_nonce,
+        "X-GADE-Worker-Signature": signature,
     }
 
 
@@ -563,7 +661,7 @@ def run_lab_synthetic_role_lease(req: ExecuteRequest) -> dict[str, Any]:
     headers = {"X-Request-ID": req.request_id or "", "X-Test-Case-ID": case_id,
                "X-Run-ID": run_id, "Connection": "close"}
     stage = "login"
-    connection = http.client.HTTPConnection("127.0.0.1", 18080, timeout=8)
+    connection = http.client.HTTPConnection(LAB_TARGET, LAB_PORT, timeout=8)
     token_value: str | None = None
     try:
         connection.request("POST", "/lab/auth/login",
@@ -581,9 +679,14 @@ def run_lab_synthetic_role_lease(req: ExecuteRequest) -> dict[str, Any]:
 
 
         stage = "role_lease"
-        connection = http.client.HTTPConnection("127.0.0.1", 18080, timeout=8)
+        connection = http.client.HTTPConnection(LAB_TARGET, LAB_PORT, timeout=8)
+        action_path = "/lab/l4/role-lease"
+        action_headers = dict(headers)
+        if OFFICE_DOCKER_LAB:
+            action_headers.update(gade_office_worker_ingress_headers(
+                password, "POST", action_path, run_id, case_id, req.request_id or ""))
         connection.request("POST", "/lab/l4/role-lease", body="{}",
-            headers={**headers, "Content-Type": "application/json",
+            headers={**action_headers, "Content-Type": "application/json",
                      "Authorization": f"Bearer {token_value}"})
         response = connection.getresponse()
         lease = json.loads(response.read(8192))
@@ -595,11 +698,22 @@ def run_lab_synthetic_role_lease(req: ExecuteRequest) -> dict[str, Any]:
                 or not isinstance(lease.get("state_sha256"), str)
                 or len(lease["state_sha256"]) != 64):
             raise ValueError("synthetic role lease proof mismatch")
+        blue_ack = lease.get("blue_observer_ack")
+        if OFFICE_DOCKER_LAB and (not isinstance(blue_ack, dict)
+                or blue_ack.get("accepted") is not True
+                or not isinstance(blue_ack.get("alert_ids"), list)
+                or not blue_ack["alert_ids"]):
+            raise ValueError("independent Blue Observer alert was not confirmed")
         connection.close()
         stage = "protected_resource"
-        connection = http.client.HTTPConnection("127.0.0.1", 18080, timeout=8)
+        connection = http.client.HTTPConnection(LAB_TARGET, LAB_PORT, timeout=8)
+        protected_path = "/lab/l4/protected"
+        protected_headers = dict(headers)
+        if OFFICE_DOCKER_LAB:
+            protected_headers.update(gade_office_worker_ingress_headers(
+                password, "GET", protected_path, run_id, case_id, req.request_id or ""))
         connection.request("GET", "/lab/l4/protected",
-            headers={**headers, "Authorization": f"Bearer {token_value}"})
+            headers={**protected_headers, "Authorization": f"Bearer {token_value}"})
         response = connection.getresponse()
         resource = json.loads(response.read(8192))
         if (response.status != 200 or not isinstance(resource, dict)
@@ -611,7 +725,9 @@ def run_lab_synthetic_role_lease(req: ExecuteRequest) -> dict[str, Any]:
             "test_case_id": case_id, "request_id": req.request_id,
             "lease_http_status": 200, "protected_http_status": 200,
             "role": "synthetic-lab-operator", "lease_ttl_seconds": 300,
-            "state_sha256": lease["state_sha256"], "simulation": True})
+            "state_sha256": lease["state_sha256"],
+            "target_event_id": lease.get("target_event_id"),
+            "blue_observer_ack": blue_ack, "simulation": True})
     except (OSError, http.client.HTTPException, TimeoutError, ValueError, json.JSONDecodeError) as exc:
         _log_execution_event("l4_fixed_action_failed", stage=stage,
                              error_type=type(exc).__name__, request_id=req.request_id,
@@ -623,9 +739,9 @@ def run_lab_synthetic_role_lease(req: ExecuteRequest) -> dict[str, Any]:
         connection.close()
 
 def run_lab_advanced_synthetic(req: ExecuteRequest) -> dict[str, Any]:
-    """Execute exactly one home-only synthetic transition, never arbitrary paths or payloads."""
+    """Execute exactly one profile-bound synthetic transition, never arbitrary paths or payloads."""
     spec = HOME_ADVANCED_ACTIONS.get(req.tool)
-    if not (HOME_LAB_EXPLORATORY and os.environ.get("GADE_ADVANCED_SYNTHETIC_ENABLED") == "1"
+    if not (SYNTHETIC_LAB_PROFILE and os.environ.get("GADE_ADVANCED_SYNTHETIC_ENABLED") == "1"
             and spec is not None and req.action_id == spec[0]):
         return structured_result(req.tool, {"error": "advanced synthetic action unavailable"}, success=False)
     try:
@@ -636,7 +752,10 @@ def run_lab_advanced_synthetic(req: ExecuteRequest) -> dict[str, Any]:
     if req.authorization_parameters != expected:
         return structured_result(req.tool, {"error": "advanced synthetic contract mismatch"}, success=False)
     case_id = req.correlation_id or ""
-    run_id = case_id.split("-")[-1] if case_id.startswith("GADE-L3-MULTI-A-R") else ""
+    reviewed_case = (case_id.startswith("GADE-L3-MULTI-A-R")
+                     or case_id.startswith("GADE-L4-ENGINEERING-")
+                     or case_id.startswith("GADE-A-D7-ENGINEERING-"))
+    run_id = case_id.split("-")[-1] if reviewed_case else ""
     username = os.environ.get("GADE_L2_TEST_USERNAME", "")
     password = os.environ.get("GADE_L2_TEST_PASSWORD", "")
     if (not run_id or len(run_id) != 12 or any(ch not in "0123456789abcdef" for ch in run_id)
@@ -644,7 +763,7 @@ def run_lab_advanced_synthetic(req: ExecuteRequest) -> dict[str, Any]:
         return structured_result(req.tool, {"error": "advanced synthetic identity or test account unavailable"}, success=False)
     headers = {"X-Request-ID": req.request_id or "", "X-Test-Case-ID": case_id,
                "X-Run-ID": run_id, "Connection": "close"}
-    connection = http.client.HTTPConnection("127.0.0.1", 18080, timeout=8)
+    connection = http.client.HTTPConnection(LAB_TARGET, LAB_PORT, timeout=8)
     token_value: str | None = None
     stage = "login"
     try:
@@ -661,31 +780,64 @@ def run_lab_advanced_synthetic(req: ExecuteRequest) -> dict[str, Any]:
         token_value = login["session_token"]
         connection.close()
         stage = "advanced_action"
-        connection = http.client.HTTPConnection("127.0.0.1", 18080, timeout=8)
+        connection = http.client.HTTPConnection(LAB_TARGET, LAB_PORT, timeout=8)
+        action_path = expected["action_path"]
+        action_headers = dict(headers)
+        if OFFICE_DOCKER_LAB:
+            action_headers.update(gade_office_worker_ingress_headers(
+                password, "POST", action_path, run_id, case_id, req.request_id or ""))
         connection.request("POST", expected["action_path"], body="{}",
-            headers={**headers, "Content-Type": "application/json",
+            headers={**action_headers, "Content-Type": "application/json",
                      "Authorization": f"Bearer {token_value}"})
         response = connection.getresponse()
         effect = json.loads(response.read(8192))
         state_sha = effect.get("state_sha256") if isinstance(effect, dict) else None
+        target_event_id = effect.get("target_event_id") if isinstance(effect, dict) else None
+        blue_ack = effect.get("blue_observer_ack") if isinstance(effect, dict) else None
         if (response.status != 200 or not isinstance(effect, dict)
                 or effect.get("outcome") != "completed" or effect.get("action") != spec[2]
                 or effect.get("run_id") != run_id or effect.get("test_case_id") != case_id
                 or effect.get("request_id") != req.request_id or effect.get("simulation") is not True
                 or not isinstance(state_sha, str) or len(state_sha) != 64
-                or any(ch not in "0123456789abcdef" for ch in state_sha)):
+                or any(ch not in "0123456789abcdef" for ch in state_sha)
+                or not isinstance(target_event_id, str) or len(target_event_id) != 32):
             raise ValueError("advanced synthetic state proof mismatch")
+        if OFFICE_DOCKER_LAB and (not isinstance(blue_ack, dict)
+                or blue_ack.get("accepted") is not True
+                or not isinstance(blue_ack.get("alert_ids"), list)
+                or not blue_ack["alert_ids"]):
+            raise ValueError("independent Blue Observer alert was not confirmed")
         safe_effect = effect.get("effect")
         if not isinstance(safe_effect, dict) or set(safe_effect) - {
             "canary_id", "control_simulation", "real_security_controls_changed",
             "node_ids", "source_node", "destination_node", "record_ids",
             "message", "ack", "receiver_id", "payload_sha256", "external_network_used",
-            "impact_mode", "real_service_interrupted"}:
+            "impact_mode", "real_service_interrupted", "component_event_ids",
+            "component_state_sha256", "separate_processes_verified", "receiver_event_id",
+            "receiver_state_sha256"}:
             raise ValueError("advanced synthetic effect contains unreviewed fields")
+        if OFFICE_DOCKER_LAB and spec[2] in {"l6-discovery", "l6-session"}:
+            component_hashes = safe_effect.get("component_state_sha256")
+            if (safe_effect.get("separate_processes_verified") is not True
+                    or not isinstance(safe_effect.get("component_event_ids"), list)
+                    or len(safe_effect["component_event_ids"]) != 2
+                    or not isinstance(component_hashes, dict)
+                    or set(component_hashes) != {"node-alpha", "node-beta"}
+                    or any(not isinstance(value, str) or len(value) != 64
+                           for value in component_hashes.values())):
+                raise ValueError("separate L6 service evidence is incomplete")
+        if OFFICE_DOCKER_LAB and spec[2] == "l7-transfer":
+            if (safe_effect.get("separate_processes_verified") is not True
+                    or not isinstance(safe_effect.get("receiver_event_id"), str)
+                    or len(safe_effect["receiver_event_id"]) != 32
+                    or not isinstance(safe_effect.get("receiver_state_sha256"), str)
+                    or len(safe_effect["receiver_state_sha256"]) != 64):
+                raise ValueError("independent L7 receiver evidence is incomplete")
         return structured_result(req.tool, {"success": True, "run_id": run_id,
             "test_case_id": case_id, "request_id": req.request_id,
             "action": spec[2], "action_http_status": 200,
-            "state_sha256": state_sha, "effect": safe_effect, "simulation": True})
+            "state_sha256": state_sha, "target_event_id": target_event_id,
+            "blue_observer_ack": blue_ack, "effect": safe_effect, "simulation": True})
     except (OSError, http.client.HTTPException, TimeoutError, ValueError, json.JSONDecodeError) as exc:
         _log_execution_event("advanced_synthetic_failed", stage=stage,
                              action_id=req.action_id, error_type=type(exc).__name__)
@@ -841,6 +993,7 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok", "version": app.version,
         "build_sha256": WORKER_BUILD_SHA256,
+        "action_contracts_sha256": ACTION_CONTRACTS_BUILD_SHA256,
         "registered_tools": sorted(((ALLOWED_TOOLS | GADE_EXPERIMENT_ONLY_TOOLS)
                                      if os.environ.get("KALI_WORKER_PROFILE", "shared").strip().lower() == "gade-experiment"
                                      else ALLOWED_TOOLS) & PROTECTED_ACTION_TOOLS),
@@ -849,9 +1002,18 @@ def health() -> dict[str, Any]:
             + ([] if "lab_synthetic_role_lease" in effective_allowed_tools() else
                [{"action_id": "lab.synthetic_role_lease.v1", "reason": "home L4 action disabled by default"}])
             + ([] if os.environ.get("GADE_ADVANCED_SYNTHETIC_ENABLED") == "1" else
-               [{"action_id": action, "reason": "home advanced synthetic action disabled by default"}
+               [{"action_id": action, "reason": "isolated advanced synthetic action disabled by default"}
                 for action, _depth, _path in HOME_ADVANCED_ACTIONS.values()])),
         "scope_policy": "worker_enforced_cidr" if scope_enabled else "external_network_controls",
+        "nuclei_template_profile": (SCENARIO_B_NUCLEI_PROFILE
+                                    if nuclei_available and os.environ.get("GADE_NUCLEI_PROFILE") == "scenario-b-fixed-v1"
+                                    else None),
+        "nuclei_bundle_sha256": (SCENARIO_B_NUCLEI_BUNDLE_SHA256
+                                 if nuclei_available and os.environ.get("GADE_NUCLEI_PROFILE") == "scenario-b-fixed-v1"
+                                 else None),
+        "nuclei_manifest_sha256": (SCENARIO_B_NUCLEI_MANIFEST_SHA256
+                                   if nuclei_available and os.environ.get("GADE_NUCLEI_PROFILE") == "scenario-b-fixed-v1"
+                                   else None),
         "scope_enforced_by_worker": scope_enabled,
         "allowed_scopes": [str(scope) for scope in scopes],
     }

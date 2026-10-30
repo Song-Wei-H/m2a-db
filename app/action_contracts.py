@@ -2,16 +2,63 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 from typing import Any
 
 
 HOME_LAB_EXPLORATORY = os.environ.get("GADE_HOME_LAB_EXPLORATORY") == "1"
-LAB_TARGET = "10.56.66.119"
-if HOME_LAB_EXPLORATORY:
-    LAB_TARGET = "127.0.0.1"
-LAB_PORT = 18080
+OFFICE_DOCKER_LAB = os.environ.get("GADE_OFFICE_DOCKER_LAB") == "1"
+if HOME_LAB_EXPLORATORY and OFFICE_DOCKER_LAB:
+    raise RuntimeError("home and office synthetic lab profiles are mutually exclusive")
+OFFICE_DOCKER_LAB_TARGET = os.environ.get("GADE_OFFICE_DOCKER_LAB_TARGET", "").strip()
+OFFICE_DOCKER_LAB_PORT = os.environ.get("GADE_OFFICE_DOCKER_LAB_PORT", "18081").strip()
+if OFFICE_DOCKER_LAB:
+    try:
+        if ipaddress.ip_address(OFFICE_DOCKER_LAB_TARGET).version != 4 or OFFICE_DOCKER_LAB_PORT != "18081":
+            raise ValueError
+    except ValueError as exc:
+        raise RuntimeError("office Docker lab requires an explicit IPv4 target and the reviewed gateway port 18081") from exc
+SYNTHETIC_LAB_PROFILE = HOME_LAB_EXPLORATORY or OFFICE_DOCKER_LAB
+LAB_TARGET = ("127.0.0.1" if HOME_LAB_EXPLORATORY else
+              OFFICE_DOCKER_LAB_TARGET if OFFICE_DOCKER_LAB else
+              os.environ.get("GADE_LAB_TARGET_HOST", "127.0.0.1").strip())
+LAB_PORT = 18080 if HOME_LAB_EXPLORATORY else (18081 if OFFICE_DOCKER_LAB else 18080)
+try:
+    if ipaddress.ip_address(LAB_TARGET).version != 4:
+        raise ValueError
+except ValueError as exc:
+    raise RuntimeError("The selected isolated lab target must be an explicit IPv4 address") from exc
 HOME_NUCLEI_TEMPLATE_PATH = "/home/kali/gade-approved-nuclei/gade-home-exposed-backup-index.yaml"
 HOME_NUCLEI_TEMPLATE_SHA256 = "7454a7f7f5d4ae47a140021d4e6754e56abe0f737ee514637c3a42c03f86320f"
+SCENARIO_B_NUCLEI_PROFILE = "gade-b-safe-positive-negative-v1"
+SCENARIO_B_NUCLEI_PROFILE_ENABLED = os.environ.get("GADE_NUCLEI_PROFILE") == "scenario-b-fixed-v1"
+SCENARIO_B_NUCLEI_TARGET = os.environ.get("GADE_SCENARIO_B_TARGET_HOST", "").strip()
+if SCENARIO_B_NUCLEI_PROFILE_ENABLED:
+    try:
+        if not SCENARIO_B_NUCLEI_TARGET or ipaddress.ip_address(SCENARIO_B_NUCLEI_TARGET).version != 4:
+            raise ValueError
+    except ValueError as exc:
+        raise RuntimeError("Scenario B requires an explicit IPv4 target in GADE_SCENARIO_B_TARGET_HOST") from exc
+SCENARIO_B_NUCLEI_TEMPLATE_DIR = "/opt/gade-approved-nuclei/scenario-b-v1"
+SCENARIO_B_NUCLEI_MANIFEST_PATH = f"{SCENARIO_B_NUCLEI_TEMPLATE_DIR}/manifest.json"
+SCENARIO_B_NUCLEI_TEMPLATE_IDS = (
+    "gade-b-positive-backup-index-v1",
+    "gade-b-negative-control-v1",
+)
+SCENARIO_B_NUCLEI_TEMPLATE_FILES = (
+    "gade-b-positive-backup-index.yaml",
+    "gade-b-negative-control.yaml",
+)
+SCENARIO_B_NUCLEI_TEMPLATE_SHA256 = {
+    "gade-b-positive-backup-index.yaml": "bf20ee8fb0ca44eca79b4118dcb9b707b5421298fcd791b4656e35e46f684bbb",
+    "gade-b-negative-control.yaml": "b34fdbe843a526de8ecbbb0a497540b38073b23e88c683261ede6f5d2ec1121c",
+}
+SCENARIO_B_NUCLEI_MANIFEST_SHA256 = "2b66f8d55124b41f87eaca7ebad84792b5a74c11de83bb47721fea5949748548"
+SCENARIO_B_NUCLEI_BUNDLE_SHA256 = "6dfdc4f60b37222e035ce3fac8ba7c2e8c55475b816b406b04308441de843727"
+SCENARIO_B_NUCLEI_TARGET_TRUTH_PATH = "lab/mode-b-target/nuclei-target-truth-v1.json"
+SCENARIO_B_NUCLEI_TARGET_TRUTH_SHA256 = os.environ.get("GADE_SCENARIO_B_TARGET_TRUTH_SHA256", "").strip()
+if SCENARIO_B_NUCLEI_PROFILE_ENABLED and not re.fullmatch(r"[0-9a-f]{64}", SCENARIO_B_NUCLEI_TARGET_TRUTH_SHA256):
+    raise RuntimeError("Scenario B requires a locally rendered and SHA-256 pinned target-truth file")
 HOME_ADVANCED_ACTIONS = {
     "lab_synthetic_canary_access": ("lab.synthetic_canary_access.v1", 5, "l5-canary"),
     "lab_simulated_visibility_comparison": ("lab.simulated_visibility_comparison.v1", 5, "l5-visibility"),
@@ -37,7 +84,7 @@ ACTION_BY_TOOL = {
     "ssh-enum": "ssh.algorithms_enum.v1",
     "mysql-info": "mysql.server_info.v1",
 }
-if HOME_LAB_EXPLORATORY:
+if SYNTHETIC_LAB_PROFILE:
     ACTION_BY_TOOL.update({tool: action for tool, (action, _depth, _path) in HOME_ADVANCED_ACTIONS.items()})
 # M2A engagement-depth requirements are part of the immutable server-side
 # Action Contract. LLM proposals cannot provide or override these values.
@@ -54,7 +101,7 @@ ACTION_REQUIRED_ATTACK_DEPTH = {
     "ssh.algorithms_enum.v1": 1,  # unauthenticated SSH algorithm enumeration only
     "mysql.server_info.v1": 1,  # unauthenticated server metadata only
 }
-if HOME_LAB_EXPLORATORY:
+if SYNTHETIC_LAB_PROFILE:
     ACTION_REQUIRED_ATTACK_DEPTH.update({action: depth for action, depth, _path in HOME_ADVANCED_ACTIONS.values()})
 TOOL_BY_ACTION = {action: tool for tool, action in ACTION_BY_TOOL.items()}
 PROTECTED_ACTION_TOOLS = frozenset(ACTION_BY_TOOL)
@@ -66,12 +113,25 @@ HEADER_IDENTITY = (
 NUCLEI_IDENTITY = (
     f"argv:nuclei-home-fixed-v1:template-sha256:{HOME_NUCLEI_TEMPLATE_SHA256}:stdin=devnull"
     if HOME_LAB_EXPLORATORY else
+    f"argv:nuclei:{SCENARIO_B_NUCLEI_PROFILE}:bundle-sha256:{SCENARIO_B_NUCLEI_BUNDLE_SHA256}:"
+    f"target=http://{SCENARIO_B_NUCLEI_TARGET}:18080/:severity=info:rate=2:concurrency=1:timeout=5:retry=0:"
+    "no-update=true:no-interactsh=true:jsonl=true:silent=true:v1"
+    if SCENARIO_B_NUCLEI_PROFILE_ENABLED else
     "argv:nuclei:-u:{canonical_url}:-severity:critical,high:-rl:5:"
     "-timeout:5:-retries:0:-no-color:v2"
 )
 
 
 def nuclei_fixed_argv(url: str) -> list[str]:
+    if SCENARIO_B_NUCLEI_PROFILE_ENABLED:
+        expected_url = f"http://{SCENARIO_B_NUCLEI_TARGET}:18080/"
+        if url != expected_url:
+            raise ValueError("Scenario B Nuclei is fixed to the reviewed synthetic target URL")
+        return [
+            "nuclei", "-u", expected_url, "-t", SCENARIO_B_NUCLEI_TEMPLATE_DIR,
+            "-severity", "info", "-rl", "2", "-c", "1", "-bs", "1",
+            "-timeout", "5", "-retries", "0", "-duc", "-ni", "-jsonl", "-silent", "-no-color",
+        ]
     argv = ["nuclei", "-u", url]
     if HOME_LAB_EXPLORATORY:
         argv += ["-t", HOME_NUCLEI_TEMPLATE_PATH]
@@ -113,7 +173,7 @@ LAB_FIXED_PYTHON_EXECUTION_IDENTITY = (
     "post-/lab/auth/login:post-/lab/execute:script=l3-fixed-python-v1:ttl=60:v1"
 )
 LAB_SYNTHETIC_ROLE_LEASE_IDENTITY = (
-    "builtin:lab-synthetic-role-lease:127.0.0.1:18080:"
+    f"builtin:lab-synthetic-role-lease:{LAB_TARGET}:{LAB_PORT}:"
     "post-/lab/auth/login:post-/lab/l4/role-lease:"
     "get-/lab/l4/protected:role=synthetic-lab-operator:ttl=300:v1"
 )
@@ -130,8 +190,8 @@ ACTION_IDENTITIES = {
     "ssh.algorithms_enum.v1": SSH_IDENTITY,
     "mysql.server_info.v1": MYSQL_IDENTITY,
 }
-if HOME_LAB_EXPLORATORY:
-    ACTION_IDENTITIES.update({action: f"builtin:home-advanced:{path}:127.0.0.1:18080:v1"
+if SYNTHETIC_LAB_PROFILE:
+    ACTION_IDENTITIES.update({action: f"builtin:isolated-advanced:{path}:{LAB_TARGET}:{LAB_PORT}:v1"
                               for action, _depth, path in HOME_ADVANCED_ACTIONS.values()})
 ACTION_TEMPLATES = {
     "lab.synthetic_role_lease.v1": "lab_synthetic_role_lease_v1",
@@ -146,7 +206,9 @@ ACTION_TEMPLATES = {
     "ssh.algorithms_enum.v1": "ssh_algorithms_enum_v2",
     "mysql.server_info.v1": "mysql_server_info_v2",
 }
-if HOME_LAB_EXPLORATORY:
+if SCENARIO_B_NUCLEI_PROFILE_ENABLED:
+    ACTION_TEMPLATES["nuclei.safe_scan.v1"] = "nuclei_safe_scenario_b_v1"
+if SYNTHETIC_LAB_PROFILE:
     ACTION_TEMPLATES.update({action: action.replace(".", "_")
                              for action, _depth, _path in HOME_ADVANCED_ACTIONS.values()})
 ACTION_PARAMETER_SCHEMAS = {
@@ -156,8 +218,8 @@ ACTION_PARAMETER_SCHEMAS = {
                      "login_path", "lease_method", "lease_path", "protected_method",
                      "protected_path", "role", "lease_ttl_seconds", "session_ttl_seconds"],
         "properties": {
-            "target": {"const": "127.0.0.1"}, "host": {"const": "127.0.0.1"},
-            "port": {"const": 18080}, "protocol": {"const": "tcp"},
+            "target": {"const": LAB_TARGET}, "host": {"const": LAB_TARGET},
+            "port": {"const": LAB_PORT}, "protocol": {"const": "tcp"},
             "service": {"const": "http"}, "login_method": {"const": "POST"},
             "login_path": {"const": "/lab/auth/login"}, "lease_method": {"const": "POST"},
             "lease_path": {"const": "/lab/l4/role-lease"},
@@ -204,9 +266,25 @@ ACTION_PARAMETER_SCHEMAS = {
         },
     },
 }
-if HOME_LAB_EXPLORATORY:
+if SCENARIO_B_NUCLEI_PROFILE_ENABLED:
+    _scenario_b_url = f"http://{SCENARIO_B_NUCLEI_TARGET}:18080/"
+    _scenario_b_nuclei_parameters = {
+        "target": SCENARIO_B_NUCLEI_TARGET, "host": SCENARIO_B_NUCLEI_TARGET, "port": 18080,
+        "protocol": "tcp", "service": "http", "canonical_url": _scenario_b_url,
+        "scheme": "http", "path": "/", "argv": nuclei_fixed_argv(_scenario_b_url),
+        "template_profile": SCENARIO_B_NUCLEI_PROFILE,
+        "template_bundle_sha256": SCENARIO_B_NUCLEI_BUNDLE_SHA256,
+        "template_ids": list(SCENARIO_B_NUCLEI_TEMPLATE_IDS), "severity_selector": "info",
+        "timeout_seconds": 5, "retry_behavior": "no-retry",
+    }
+    ACTION_PARAMETER_SCHEMAS["nuclei.safe_scan.v1"] = {
+        "type": "object", "additionalProperties": False,
+        "required": sorted(_scenario_b_nuclei_parameters),
+        "properties": {key: {"const": value} for key, value in _scenario_b_nuclei_parameters.items()},
+    }
+if SYNTHETIC_LAB_PROFILE:
     for _action, _depth, _path in HOME_ADVANCED_ACTIONS.values():
-        _fixed = {"target": "127.0.0.1", "host": "127.0.0.1", "port": 18080,
+        _fixed = {"target": LAB_TARGET, "host": LAB_TARGET, "port": LAB_PORT,
                   "protocol": "tcp", "service": "http", "login_method": "POST",
                   "login_path": "/lab/auth/login", "action_method": "POST",
                   "action_path": f"/lab/advanced/{_path}", "request_body": {},
@@ -240,19 +318,24 @@ def canonical_action_parameters(
 ) -> dict[str, Any]:
     if action_id not in TOOL_BY_ACTION:
         raise ValueError(f"Unknown migrated action {action_id!r}")
-    if HOME_LAB_EXPLORATORY and action_id in {item[0] for item in HOME_ADVANCED_ACTIONS.values()}:
+    if SYNTHETIC_LAB_PROFILE and action_id in {item[0] for item in HOME_ADVANCED_ACTIONS.values()}:
         host = target.strip()
-        if (host != "127.0.0.1" or port != 18080 or (protocol or "").lower() != "tcp"
+        if (host != LAB_TARGET or port != LAB_PORT or (protocol or "").lower() != "tcp"
                 or (service or "").lower() != "http"):
-            raise ValueError("advanced synthetic action is fixed to the home Lab HTTP endpoint")
+            raise ValueError("advanced synthetic action is fixed to the selected isolated Lab endpoint")
         return {key: value["const"] for key, value in ACTION_PARAMETER_SCHEMAS[action_id]["properties"].items()}
+    if action_id == "nuclei.safe_scan.v1" and SCENARIO_B_NUCLEI_PROFILE_ENABLED:
+        if (target.strip() != SCENARIO_B_NUCLEI_TARGET or port != 18080
+                or (protocol or "").lower() != "tcp" or (service or "").lower() != "http"):
+            raise ValueError("Scenario B Nuclei is fixed to the reviewed isolated target HTTP endpoint")
+        return dict(_scenario_b_nuclei_parameters)
     if action_id == "lab.synthetic_role_lease.v1":
         host = target.strip()
-        if (not HOME_LAB_EXPLORATORY or host != "127.0.0.1" or port != 18080
+        if (not SYNTHETIC_LAB_PROFILE or host != LAB_TARGET or port != LAB_PORT
                 or (protocol or "").lower() != "tcp" or (service or "").lower() != "http"):
-            raise ValueError("L4 synthetic role lease is fixed to the home Lab HTTP endpoint")
+            raise ValueError("L4 synthetic role lease is fixed to the selected isolated Lab endpoint")
         return {
-            "target": host, "host": host, "port": 18080,
+            "target": host, "host": host, "port": LAB_PORT,
             "protocol": "tcp", "service": "http", "login_method": "POST",
             "login_path": "/lab/auth/login", "lease_method": "POST",
             "lease_path": "/lab/l4/role-lease", "protected_method": "GET",

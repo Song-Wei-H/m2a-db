@@ -57,4 +57,30 @@ Assert-Rejected { Assert-GadeWorkerDeploymentEvidence @{ status = 'ALREADY_DEPLO
 Assert-Rejected { Assert-GadeWorkerDeploymentEvidence @{ shared_worker_pid = $null; shared_worker_pid_state = 'NOT_CAPTURED_NO_DEPLOYMENT' } } 'missing required status'
 Assert-Rejected { Assert-GadeWorkerDeploymentEvidence @{ status = 'UNKNOWN'; shared_worker_pid = $null; shared_worker_pid_state = 'NOT_CAPTURED_NO_DEPLOYMENT' } } 'unsupported status'
 
+$roundModels = @(
+    [pscustomobject]@{actual_model_reported_by_cli='upstream-model-x'},
+    [pscustomobject]@{actual_model_reported_by_cli='upstream-model-x'}
+)
+$modelSummary = Get-GadeModelIdentitySummary -Items $roundModels
+Assert-Test ($modelSummary.actual_model_identity -ceq 'upstream-model-x' -and
+    $modelSummary.actual_model_identity_evidence_status -ceq 'CONSISTENTLY_REPORTED' -and
+    $modelSummary.reported_item_count -eq 2 -and $modelSummary.total_item_count -eq 2) `
+    'Round-shaped records must summarize consistent CLI model identity without requiring arm-only fields.'
+$missingRoundModel = [pscustomobject]@{actual_model_reported_by_cli=$null}
+$missingArmStatus = [pscustomobject]@{actual_model_reported_by_cli=$null}
+$modelSummary = Get-GadeModelIdentitySummary -Items @($roundModels[0], $missingRoundModel, $missingArmStatus)
+Assert-Test ($modelSummary.actual_model_identity -ceq 'UNKNOWN' -and
+    $modelSummary.actual_model_identity_evidence_status -ceq 'UNKNOWN_OR_INCOMPLETE' -and
+    $modelSummary.reported_item_count -eq 1 -and $modelSummary.total_item_count -eq 3) `
+    'Missing model identity fields must remain UNKNOWN and be counted as incomplete.'
+$modelSummary = Get-GadeModelIdentitySummary -Items @([pscustomobject]@{}, @{actual_model_reported_by_cli='upstream-model-x'})
+Assert-Test ($modelSummary.actual_model_identity -ceq 'UNKNOWN' -and
+    $modelSummary.actual_model_identity_evidence_status -ceq 'UNKNOWN_OR_INCOMPLETE') `
+    'Missing StrictMode PSCustomObject fields must not throw or imply a reported identity.'
+$modelSummary = Get-GadeModelIdentitySummary -Items @([pscustomobject]@{actual_model_reported_by_cli='model-a'},
+    [pscustomobject]@{actual_model_reported_by_cli='model-b'})
+Assert-Test ($modelSummary.actual_model_identity -ceq 'UNKNOWN' -and
+    $modelSummary.actual_model_identity_evidence_status -ceq 'UNKNOWN_OR_INCOMPLETE') `
+    'Conflicting upstream model identities must remain UNKNOWN.'
+
 Write-Output "L3_MANIFEST_CONTROL_FLOW_TEST=PASS assertions=$script:assertions powershell=$($PSVersionTable.PSVersion)"

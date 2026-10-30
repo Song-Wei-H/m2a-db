@@ -50,3 +50,13 @@ reports/
 mlruns/
 .m2a-launcher.lock
 experiments/**/local-only/
+
+# Generated local GADE lab configuration. Keep the reviewed portable templates
+# committed; never publish machine addresses or credentials.
+/compose.gade-a-d7.yml
+/lab/mode-b-target/nginx.gade-a-d7.conf
+/lab/mode-b-target/nuclei-target-truth-v1.json
+/lab/mode-b-target/.env.*.local
+/lab/mode-b-target/.env.*.private
+/.env.gade-a-d7.local
+!/.env.gade-a-d7.example

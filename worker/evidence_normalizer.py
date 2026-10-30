@@ -8,10 +8,16 @@ operations, or command generation.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
+import os
 from typing import Any
 from urllib.parse import urlparse
 
-from app.action_contracts import HOME_ADVANCED_ACTIONS
+from app.action_contracts import (
+    HOME_ADVANCED_ACTIONS, OFFICE_DOCKER_LAB,
+    SCENARIO_B_NUCLEI_PROFILE, SCENARIO_B_NUCLEI_PROFILE_ENABLED,
+    SCENARIO_B_NUCLEI_TEMPLATE_IDS, SCENARIO_B_NUCLEI_BUNDLE_SHA256,
+)
 
 Evidence = dict[str, Any]
 
@@ -146,6 +152,8 @@ def _nuclei_normalize(
     ctx: Any | None = None,
     tool_result_id: int | None = None,
 ) -> list[Evidence]:
+    if os.environ.get("GADE_NUCLEI_PROFILE") == "scenario-b-fixed-v1":
+        return _scenario_b_nuclei_normalize(parsed_output, raw_output, ctx, tool_result_id)
     evidence_list: list[Evidence] = []
     findings = parsed_output.get("findings") or []
     if not isinstance(findings, list):
@@ -210,6 +218,79 @@ def _nuclei_normalize(
         })
         evidence_list.append(evidence)
     return evidence_list
+
+
+def _scenario_b_nuclei_normalize(
+    parsed_output: dict[str, Any],
+    raw_output: str,
+    ctx: Any | None,
+    tool_result_id: int | None,
+) -> list[Evidence]:
+    """Validate only the exact fixed B/D1 synthetic control pair; never infer CVEs."""
+    host = _ctx_value(ctx, "host")
+    try:
+        if not isinstance(host, str) or ipaddress.ip_address(host).version != 4:
+            raise ValueError
+    except ValueError as exc:
+        raise ValueError("Scenario B Nuclei result has an invalid target host") from exc
+    expected_urls = {
+        "gade-b-positive-backup-index-v1": f"http://{host}:18080/backup/",
+        "gade-b-negative-control-v1": f"http://{host}:18080/lab/nuclei-negative-control",
+    }
+    findings = parsed_output.get("findings")
+    if (parsed_output.get("success") is not True
+            or parsed_output.get("parser_success") is not True
+            or parsed_output.get("profile_id") != SCENARIO_B_NUCLEI_PROFILE
+            or parsed_output.get("parse_errors") not in ([], None)
+            or not isinstance(findings, list) or len(findings) != 2
+            or _ctx_value(ctx, "host") != host
+            or _ctx_value(ctx, "port") != 18080):
+        raise ValueError("Scenario B Nuclei result is incomplete or has the wrong profile/target")
+    by_id: dict[str, dict[str, Any]] = {}
+    for finding in findings:
+        if not isinstance(finding, dict):
+            raise ValueError("Scenario B Nuclei result contains a malformed finding")
+        template_id = finding.get("template_id")
+        if template_id not in expected_urls or template_id in by_id:
+            raise ValueError("Scenario B Nuclei result contains a duplicate or unreviewed template ID")
+        if (finding.get("severity") != "info" or finding.get("cve_ids") != []
+                or finding.get("url") != expected_urls[template_id]
+                or finding.get("matched_at") != expected_urls[template_id]):
+            raise ValueError("Scenario B Nuclei finding differs from its fixed non-CVE contract")
+        by_id[template_id] = finding
+    if set(by_id) != set(SCENARIO_B_NUCLEI_TEMPLATE_IDS):
+        raise ValueError("Scenario B Nuclei result does not contain the complete fixed control pair")
+
+    evidence: list[Evidence] = []
+    for template_id in SCENARIO_B_NUCLEI_TEMPLATE_IDS:
+        positive = template_id == "gade-b-positive-backup-index-v1"
+        row = _base_evidence(
+            tool_name="nuclei_safe",
+            evidence_type=("synthetic_configuration_candidate" if positive
+                           else "synthetic_negative_control_observed"),
+            raw_output=raw_output,
+            ctx=ctx,
+            tool_result_id=tool_result_id,
+            confidence=0.6 if positive else 0.95,
+        )
+        row["details"].update({
+            "template_id": template_id,
+            "template_profile": SCENARIO_B_NUCLEI_PROFILE,
+            "template_bundle_sha256": SCENARIO_B_NUCLEI_BUNDLE_SHA256,
+            "benchmark_control": "positive" if positive else "negative",
+            "benchmark_severity_label": "info",
+            "cve": None,
+            "real_world_impact": "NOT_ESTABLISHED",
+            "interpretation": (
+                "Synthetic directory-index behavior observed; no CVE or real-world vulnerability asserted."
+                if positive else
+                "Synthetic negative-control route matched the fixed absence matcher; not a vulnerability finding."
+            ),
+            "target_truth_ref": "nuclei-target-truth-v1.json",
+            "target_side_independent_verification": "RECORDED_BY_RUNNER_TARGET_TRUTH_GATE",
+        })
+        evidence.append(row)
+    return evidence
 
 
 # ---------------------------------------------------------------------------
@@ -500,13 +581,38 @@ def _fixed_lab_action_normalize(
             "l7-c2": {"message": "LAB-NOOP", "ack": "LAB-NOOP-ACK"},
             "l7-impact": {"impact_mode": "simulated_interruption", "real_service_interrupted": False},
         }
-        if fixed_path == "l7-transfer":
+        if OFFICE_DOCKER_LAB and fixed_path == "l6-discovery":
+            component_ids = effect.get("component_event_ids")
+            component_hashes = effect.get("component_state_sha256")
+            def is_hex(value: Any, length: int) -> bool:
+                return (isinstance(value, str) and len(value) == length
+                        and all(ch in "0123456789abcdef" for ch in value))
+            valid_effect = (set(effect) == {"node_ids", "component_event_ids", "component_state_sha256", "separate_processes_verified"}
+                            and effect.get("node_ids") == ["node-alpha", "node-beta"]
+                            and effect.get("separate_processes_verified") is True
+                            and isinstance(component_ids, list) and len(component_ids) == 2
+                            and len(set(component_ids)) == 2 and all(is_hex(item, 32) for item in component_ids)
+                            and isinstance(component_hashes, dict)
+                            and set(component_hashes) == {"node-alpha", "node-beta"}
+                            and all(is_hex(item, 64) for item in component_hashes.values()))
+        elif fixed_path == "l7-transfer":
+            receiver_keys = {"receiver_id", "external_network_used", "payload_sha256"}
+            if OFFICE_DOCKER_LAB:
+                receiver_keys |= {"receiver_event_id", "receiver_state_sha256", "separate_processes_verified"}
             valid_effect = (effect.get("receiver_id") == "lab-receiver-fixed"
                             and effect.get("external_network_used") is False
                             and isinstance(effect.get("payload_sha256"), str)
                             and len(effect["payload_sha256"]) == 64
                             and all(ch in "0123456789abcdef" for ch in effect["payload_sha256"])
-                            and set(effect) == {"receiver_id", "external_network_used", "payload_sha256"})
+                            and set(effect) == receiver_keys)
+            if OFFICE_DOCKER_LAB:
+                valid_effect = (valid_effect and effect.get("separate_processes_verified") is True
+                                and isinstance(effect.get("receiver_event_id"), str)
+                                and len(effect["receiver_event_id"]) == 32
+                                and all(ch in "0123456789abcdef" for ch in effect["receiver_event_id"])
+                                and isinstance(effect.get("receiver_state_sha256"), str)
+                                and len(effect["receiver_state_sha256"]) == 64
+                                and all(ch in "0123456789abcdef" for ch in effect["receiver_state_sha256"]))
         else:
             valid_effect = effect == reviewed_effect[fixed_path]
         if not valid_effect:

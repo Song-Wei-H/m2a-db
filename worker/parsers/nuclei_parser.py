@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any
 from urllib.parse import urlparse
 
 from worker.parsers.common import stable_result
+from app.action_contracts import SCENARIO_B_NUCLEI_PROFILE, SCENARIO_B_NUCLEI_TEMPLATE_IDS
 
 
 NUCLEI_TEXT_RE = re.compile(
@@ -105,14 +107,21 @@ def parse_nuclei_output(
             else:
                 parse_errors.append(line[:200])
 
+    scenario_b_profile = os.environ.get("GADE_NUCLEI_PROFILE") == "scenario-b-fixed-v1"
     parser_success = bool(findings)
     reason = None
     if not raw_output.strip():
         reason = "empty input"
     elif not parser_success:
         reason = "no nuclei findings parsed"
+    if scenario_b_profile:
+        observed_ids = [str(item.get("template_id") or "") for item in findings]
+        parser_success = (not parse_errors and len(observed_ids) == 2
+                          and set(observed_ids) == set(SCENARIO_B_NUCLEI_TEMPLATE_IDS))
+        if not parser_success:
+            reason = "Scenario B output does not contain exactly the two fixed positive/negative template results"
 
-    return stable_result(
+    result = stable_result(
         tool_name="nuclei_safe",
         success=success,
         evidence_type="vulnerability_scan",
@@ -129,3 +138,7 @@ def parse_nuclei_output(
             "finding_count": len(findings),
         },
     )
+    if scenario_b_profile:
+        result["profile_id"] = SCENARIO_B_NUCLEI_PROFILE
+        result["expected_template_ids"] = list(SCENARIO_B_NUCLEI_TEMPLATE_IDS)
+    return result

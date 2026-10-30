@@ -106,3 +106,30 @@ function Assert-GadeWorkerDeploymentEvidence {
 
     return $true
 }
+
+function Get-GadeModelIdentitySummary {
+    param(
+        [AllowEmptyCollection()][object[]]$Items,
+        [string]$IdentityProperty = 'actual_model_reported_by_cli'
+    )
+
+    $values = @()
+    $missingOrBlank = 0
+    foreach ($item in @($Items)) {
+        $state = Get-GadePropertyState -InputObject $item -Name $IdentityProperty
+        if (-not $state.Exists -or [string]::IsNullOrWhiteSpace([string]$state.Value)) {
+            $missingOrBlank++
+            continue
+        }
+        $values += [string]$state.Value
+    }
+
+    $uniqueValues = @($values | Select-Object -Unique)
+    $consistent = (@($Items).Count -gt 0 -and $missingOrBlank -eq 0 -and $uniqueValues.Count -eq 1)
+    return [pscustomobject]@{
+        actual_model_identity = $(if ($consistent) { $uniqueValues[0] } else { 'UNKNOWN' })
+        actual_model_identity_evidence_status = $(if ($consistent) { 'CONSISTENTLY_REPORTED' } else { 'UNKNOWN_OR_INCOMPLETE' })
+        reported_item_count = $values.Count
+        total_item_count = @($Items).Count
+    }
+}

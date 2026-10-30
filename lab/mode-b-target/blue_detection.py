@@ -11,11 +11,12 @@ ADVANCED_RULE_EVENTS = {
     "l5-canary": "l5_canary_accessed", "l5-visibility": "l5_visibility_simulated",
     "l6-discovery": "l6_topology_discovered", "l6-session": "l6_session_established",
     "l7-collection": "l7_collection_created", "l7-c2": "l7_local_c2_acknowledged",
-    "l7-transfer": "l7_receiver_accepted", "l7-impact": "l7_impact_simulated",
+    "l7-transfer": "l7_receiver_transfer_completed", "l7-impact": "l7_impact_simulated",
 }
 
 
-def detect_l4_role_lease(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def detect_l4_role_lease(events: list[dict[str, Any]], *,
+                         detection_mode: str = "OFFLINE_REPLAY") -> list[dict[str, Any]]:
     """Alert only on two independent event types with exact shared identity/hash.
 
     This is a rule result over supplied logs, not proof that a live blue-team
@@ -49,12 +50,13 @@ def detect_l4_role_lease(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                            "first_event_utc": first["time_utc"],
                            "alert_event_utc": event["time_utc"],
                            "detection_latency_ms": round(latency_ms, 3),
-                           "simulation": True})
+                           "detection_mode": detection_mode, "simulation": True})
     return alerts
 
 
 def detect_advanced_synthetic(events: list[dict[str, Any]],
-                              node_events: dict[str, list[dict[str, Any]]] | None = None) -> list[dict[str, Any]]:
+                              node_events: dict[str, list[dict[str, Any]]] | None = None,
+                              *, detection_mode: str = "OFFLINE_REPLAY") -> list[dict[str, Any]]:
     """Offline replay only. Correlate request/result and independent L6 node files."""
     starts: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
     alerts: list[dict[str, Any]] = []
@@ -72,12 +74,40 @@ def detect_advanced_synthetic(events: list[dict[str, Any]],
             continue
         if event.get("event") != ADVANCED_RULE_EVENTS[action] or key not in starts:
             continue
-        if action == "l6-session":
+        if action in {"l6-discovery", "l6-session"} and event.get("component_event_ids") is not None:
+            source = [row for row in node_events.get("node-alpha", []) if row.get("event") == "l6_source_session_opened"]
+            if action == "l6-discovery":
+                source = [row for row in node_events.get("node-alpha", []) if row.get("event") == "l6_node_identity_observed"]
+            destination = [row for row in node_events.get("node-beta", [])
+                           if row.get("event") == ("l6_node_identity_observed" if action == "l6-discovery"
+                                                     else "l6_destination_session_accepted")]
+            source = [row for row in source if all(row.get(field) == event.get(field)
+                      for field in ("run_id", "test_case_id", "request_id"))]
+            destination = [row for row in destination if all(row.get(field) == event.get(field)
+                           for field in ("run_id", "test_case_id", "request_id"))]
+            expected_ids = event.get("component_event_ids")
+            actual_ids = [row.get("event_id") for row in (source + destination)]
+            if (not isinstance(expected_ids, list) or len(expected_ids) != 2
+                    or set(expected_ids) != set(actual_ids)
+                    or not all(isinstance(row.get("component_state_sha256"), str)
+                               and len(row["component_state_sha256"]) == 64
+                               for row in (source + destination))):
+                continue
+        elif action == "l6-session":
             source = [row for row in node_events.get("node-alpha", []) if row.get("event") == "l6_source_session_opened"]
             destination = [row for row in node_events.get("node-beta", []) if row.get("event") == "l6_destination_session_accepted"]
             if not all(any(all(row.get(field) == event.get(field) for field in
                                ("run_id", "test_case_id", "request_id", "state_sha256")) for row in rows)
                        for rows in (source, destination)):
+                continue
+        if action == "l7-transfer" and event.get("receiver_event_id") is not None:
+            receiver = [row for row in node_events.get("receiver", [])
+                        if row.get("event") == "l7_receiver_accepted"
+                        and row.get("event_id") == event.get("receiver_event_id")
+                        and all(row.get(field) == event.get(field)
+                                for field in ("run_id", "test_case_id", "request_id"))
+                        and row.get("state_sha256") == event.get("receiver_state_sha256")]
+            if len(receiver) != 1:
                 continue
         try:
             started = datetime.fromisoformat(starts[key]["time_utc"].replace("Z", "+00:00"))
@@ -94,5 +124,5 @@ def detect_advanced_synthetic(events: list[dict[str, Any]],
                        "first_event_utc": starts[key]["time_utc"],
                        "alert_event_utc": event["time_utc"],
                        "detection_latency_ms": round(latency_ms, 3),
-                       "detection_mode": "OFFLINE_REPLAY", "simulation": True})
+                       "detection_mode": detection_mode, "simulation": True})
     return alerts

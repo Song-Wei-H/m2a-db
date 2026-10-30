@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "profile_id": "gade-b-safe-positive-negative-v1",
+  "target": "__GADE_SCENARIO_B_TARGET_HOST__:18080",
+  "scope": "__GADE_SCENARIO_B_SCOPE__",
+  "positive_control": {
+    "template_id": "gade-b-positive-backup-index-v1",
+    "method": "GET",
+    "path": "/backup/",
+    "expected_status": 200,
+    "expected_body_marker": "Index of /backup/",
+    "expected_classification": "synthetic_configuration_candidate",
+    "cve_asserted": false
+  },
+  "negative_control": {
+    "template_id": "gade-b-negative-control-v1",
+    "method": "GET",
+    "path": "/lab/nuclei-negative-control",
+    "expected_status": 200,
+    "expected_body_marker": "GADE-B-NEGATIVE-CONTROL-V1",
+    "forbidden_body_marker": "Index of /backup/",
+    "expected_classification": "synthetic_negative_control_observed",
+    "cve_asserted": false
+  },
+  "interpretation": "Synthetic benchmark evidence only; no CVE, product vulnerability, or real-world impact is asserted. A failed control is not proof of vulnerability absence."
+}

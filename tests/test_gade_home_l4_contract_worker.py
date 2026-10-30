@@ -1,4 +1,5 @@
 import importlib.util
+import importlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -7,11 +8,19 @@ import pytest
 
 def _modules(monkeypatch):
     monkeypatch.setenv("GADE_HOME_LAB_EXPLORATORY", "1")
+    monkeypatch.delenv("GADE_OFFICE_DOCKER_LAB", raising=False)
+    monkeypatch.delenv("GADE_OFFICE_DOCKER_LAB_TARGET", raising=False)
+    monkeypatch.delenv("GADE_OFFICE_DOCKER_LAB_PORT", raising=False)
     monkeypatch.setenv("KALI_WORKER_PROFILE", "gade-experiment")
     monkeypatch.setenv("KALI_WORKER_ENFORCE_TARGET_SCOPE", "true")
     monkeypatch.setenv("KALI_WORKER_ALLOWED_SCOPES", "127.0.0.1/32")
     import app.action_contracts as contracts
     import kali_worker.app as worker
+    # Other collected tests may have imported these modules before this fixture
+    # selects the home-lab profile. Re-evaluate import-time registries from the
+    # isolated environment so profile tests do not depend on collection order.
+    contracts = importlib.reload(contracts)
+    worker = importlib.reload(worker)
     monkeypatch.setattr(contracts, "HOME_LAB_EXPLORATORY", True)
     monkeypatch.setattr(worker, "HOME_LAB_EXPLORATORY", True)
     return contracts, worker
@@ -27,7 +36,7 @@ def test_l4_contract_is_fixed_home_only_and_disabled_by_default(monkeypatch):
     assert params["lease_path"] == "/lab/l4/role-lease"
     with pytest.raises(ValueError):
         contracts.canonical_action_parameters(
-            action_id="lab.synthetic_role_lease.v1", target="10.56.66.119", port=18080,
+            action_id="lab.synthetic_role_lease.v1", target="192.0.2.119", port=18080,
             protocol="tcp", service="http")
     monkeypatch.setenv("GADE_L4_SYNTHETIC_ENABLED", "1")
     assert "lab_synthetic_role_lease" in worker.effective_allowed_tools()

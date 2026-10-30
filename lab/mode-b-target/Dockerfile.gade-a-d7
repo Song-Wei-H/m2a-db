@@ -1,0 +1,15 @@
+FROM python@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY l2_auth.py /app/l2_auth.py
+COPY l3_execution_task.py /app/l3_execution_task.py
+COPY blue_detection.py /app/blue_detection.py
+COPY blue_observer.py /app/blue_observer.py
+COPY synthetic_component.py /app/synthetic_component.py
+# Git's Windows autocrlf checkout changes the raw script digest. Normalize the
+# reviewed fixed-script bytes inside the image and fail the image build unless
+# they exactly match the Worker/Action Contract SHA-256.
+RUN python -c "from pathlib import Path; import hashlib; p=Path('/app/l3_execution_task.py'); p.write_text(p.read_text(encoding='utf-8'), encoding='utf-8'); expected='b6d8391432ad8f0f993a51c2c35e13d86354f3d0220c3e1c71d69e82a5f164bb'; actual=hashlib.sha256(p.read_bytes()).hexdigest(); assert actual == expected, f'L3 reviewed script SHA mismatch: {actual}'"
+USER 101:101
+EXPOSE 8081 8090 8091 8092
+CMD ["python", "/app/l2_auth.py"]

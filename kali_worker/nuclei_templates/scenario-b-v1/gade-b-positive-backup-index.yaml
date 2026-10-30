@@ -1,0 +1,22 @@
+id: gade-b-positive-backup-index-v1
+
+info:
+  name: GADE B synthetic backup-index positive control
+  author: GADE/M2A
+  severity: info
+  description: Fixed non-CVE synthetic evidence control for the isolated B/D1 lab.
+  tags: gade,synthetic,b-positive,non-cve
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/backup/"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - "Index of /backup/"

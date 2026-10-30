@@ -38,9 +38,16 @@ DEPTH_VALIDATION_TOOLS = frozenset(
     }
 )
 
-# Registered only by the run-scoped GADE L2 experiment profile. Keep this out
+# Registered only by run-scoped GADE experiment profiles. Keep these out
 # of CANONICAL_ALLOWED_TOOLS so ordinary M2A defaults do not enable it.
-EXPERIMENT_ONLY_TOOLS = frozenset({"lab_valid_account_access", "lab_fixed_python_execution"})
+EXPERIMENT_ONLY_TOOLS = frozenset({
+    "lab_valid_account_access", "lab_fixed_python_execution",
+    "lab_synthetic_role_lease",
+    "lab_synthetic_canary_access",
+    "lab_synthetic_node_discovery",
+    "lab_synthetic_collection",
+    "lab_synthetic_receiver_transfer",
+})
 
 LEGACY_TOOL_ALIASES: dict[str, str] = {
     "httpx": "httpx_basic",

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "approval_status": "APPROVED",
+  "profile_id": "gade-b-safe-positive-negative-v1",
+  "severity_selector": "info",
+  "selection_mode": "exact-fixed-bundle",
+  "runtime_loaded_count": 2,
+  "templates": [
+    {
+      "path": "gade-b-negative-control.yaml",
+      "severity": "info",
+      "sha256": "b34fdbe843a526de8ecbbb0a497540b38073b23e88c683261ede6f5d2ec1121c"
+    },
+    {
+      "path": "gade-b-positive-backup-index.yaml",
+      "severity": "info",
+      "sha256": "bf20ee8fb0ca44eca79b4118dcb9b707b5421298fcd791b4656e35e46f684bbb"
+    }
+  ]
+}

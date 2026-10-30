@@ -1,0 +1,197 @@
+services:
+  blue-observer:
+    build:
+      context: ./lab/mode-b-target
+      dockerfile: Dockerfile.gade-a-d7
+      pull: false
+      network: none
+    image: ${GADE_A_D7_IMAGE:?set unique image name}
+    pull_policy: never
+    command: ["python", "/app/blue_observer.py"]
+    restart: "no"
+    read_only: true
+    user: "101:101"
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=12m,mode=0700,uid=101,gid=101,noexec,nosuid,nodev"]
+    mem_limit: 64m
+    cpus: 0.15
+    pids_limit: 32
+    env_file: ["${GADE_A_D7_BLUE_ENV_FILE:?set blue observer env file}"]
+    environment:
+      GADE_BLUE_STATE_DIR: /tmp/gade-blue-observer
+    expose: ["8090"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 2s
+    networks: [gade-a-d7-internal]
+
+  node-alpha:
+    image: ${GADE_A_D7_IMAGE:?set unique image name}
+    pull_policy: never
+    command: ["python", "/app/synthetic_component.py"]
+    restart: "no"
+    read_only: true
+    user: "101:101"
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=8m,mode=0700,uid=101,gid=101,noexec,nosuid,nodev"]
+    mem_limit: 48m
+    cpus: 0.10
+    pids_limit: 24
+    env_file: ["${GADE_A_D7_COMPONENT_ENV_FILE:?set component env file}"]
+    environment:
+      GADE_COMPONENT_ROLE: node-alpha
+      GADE_COMPONENT_STATE_DIR: /tmp/gade-component
+    expose: ["8091"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 2s
+    depends_on:
+      blue-observer: {condition: service_healthy}
+    networks: [gade-a-d7-internal]
+
+  node-beta:
+    image: ${GADE_A_D7_IMAGE:?set unique image name}
+    pull_policy: never
+    command: ["python", "/app/synthetic_component.py"]
+    restart: "no"
+    read_only: true
+    user: "101:101"
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=8m,mode=0700,uid=101,gid=101,noexec,nosuid,nodev"]
+    mem_limit: 48m
+    cpus: 0.10
+    pids_limit: 24
+    env_file: ["${GADE_A_D7_COMPONENT_ENV_FILE:?set component env file}"]
+    environment:
+      GADE_COMPONENT_ROLE: node-beta
+      GADE_COMPONENT_STATE_DIR: /tmp/gade-component
+    expose: ["8091"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 2s
+    depends_on:
+      blue-observer: {condition: service_healthy}
+    networks: [gade-a-d7-internal]
+
+  receiver:
+    image: ${GADE_A_D7_IMAGE:?set unique image name}
+    pull_policy: never
+    command: ["python", "/app/synthetic_component.py"]
+    restart: "no"
+    read_only: true
+    user: "101:101"
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=8m,mode=0700,uid=101,gid=101,noexec,nosuid,nodev"]
+    mem_limit: 48m
+    cpus: 0.10
+    pids_limit: 24
+    env_file: ["${GADE_A_D7_COMPONENT_ENV_FILE:?set component env file}"]
+    environment:
+      GADE_COMPONENT_ROLE: receiver
+      GADE_COMPONENT_STATE_DIR: /tmp/gade-component
+    expose: ["8092"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 2s
+    depends_on:
+      blue-observer: {condition: service_healthy}
+    networks: [gade-a-d7-internal]
+
+  gade-a-d7-target:
+    image: ${GADE_A_D7_IMAGE:?set unique image name}
+    pull_policy: never
+    command: ["python", "/app/l2_auth.py"]
+    restart: "no"
+    read_only: true
+    user: "101:101"
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=12m,mode=0700,uid=101,gid=101,noexec,nosuid,nodev"]
+    mem_limit: 64m
+    cpus: 0.15
+    pids_limit: 32
+    env_file: ["${GADE_A_D7_TARGET_ENV_FILE:?set target env file}"]
+    environment:
+      GADE_L2_SESSION_TTL_SECONDS: "60"
+      GADE_L4_SYNTHETIC_ENABLED: "1"
+      GADE_ADVANCED_SYNTHETIC_ENABLED: "1"
+      GADE_BLUE_OBSERVER_REQUIRED: "1"
+      GADE_SEPARATE_SYNTHETIC_SERVICES: "1"
+      GADE_WORKER_INGRESS_AUTH_REQUIRED: "1"
+      GADE_BLUE_OBSERVER_URL: http://blue-observer:8090/ingest
+      GADE_NODE_ALPHA_URL: http://node-alpha:8091
+      GADE_NODE_BETA_URL: http://node-beta:8091
+      GADE_RECEIVER_URL: http://receiver:8092
+      GADE_L3_STATE_DIR: /tmp/gade-lab-state
+    expose: ["8081"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/lab/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 2s
+    depends_on:
+      blue-observer: {condition: service_healthy}
+      node-alpha: {condition: service_healthy}
+      node-beta: {condition: service_healthy}
+      receiver: {condition: service_healthy}
+    networks: [gade-a-d7-internal]
+
+  target-gateway:
+    image: docker/welcome-to-docker@sha256:c4d56c24da4f009ecf8352146b43497fe78953edb4c679b841732beb97e588b0
+    pull_policy: never
+    command: ["nginx", "-c", "/etc/nginx/gade-a-d7.conf", "-g", "daemon off;"]
+    restart: "no"
+    user: "101:101"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=8m,mode=1777,noexec,nosuid,nodev"]
+    mem_limit: 96m
+    cpus: 0.20
+    pids_limit: 32
+    ports: ["${GADE_A_D7_HOST_BIND_IP:?set local bind IP}:${GADE_A_D7_HOST_PORT:-18081}:8080"]
+    volumes:
+      - ./lab/mode-b-target/nginx.gade-a-d7.conf:/etc/nginx/gade-a-d7.conf:ro
+      - ./lab/mode-b-target/www:/usr/share/nginx/mode-b-target:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+    depends_on:
+      gade-a-d7-target: {condition: service_healthy}
+    networks: [gade-a-d7-internal, gade-a-d7-ingress]
+
+networks:
+  gade-a-d7-internal:
+    internal: true
+  # Only the host-published gateway uses ingress; all backend services stay internal.
+  gade-a-d7-ingress:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${GADE_A_D7_INGRESS_SUBNET:?set ingress subnet}
+          gateway: ${GADE_A_D7_INGRESS_GATEWAY:?set ingress gateway}
+    internal: false
+    attachable: false
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+      com.docker.network.bridge.enable_icc: "false"

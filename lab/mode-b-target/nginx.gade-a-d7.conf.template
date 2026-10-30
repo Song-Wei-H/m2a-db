@@ -1,0 +1,66 @@
+pid /tmp/nginx.pid;
+error_log /dev/stderr notice;
+
+events {
+    worker_connections 128;
+}
+
+http {
+    access_log /dev/stdout;
+    server_tokens off;
+    client_body_temp_path /tmp/client_temp;
+    proxy_temp_path /tmp/proxy_temp;
+    fastcgi_temp_path /tmp/fastcgi_temp;
+    uwsgi_temp_path /tmp/uwsgi_temp;
+    scgi_temp_path /tmp/scgi_temp;
+
+    server {
+        listen 8080;
+        server_name _;
+        root /usr/share/nginx/mode-b-target;
+        allow 127.0.0.1;
+        allow __GADE_A_D7_WORKER_SOURCE_IP__;
+        allow __GADE_A_D7_HOST_SOURCE_IP__;
+        deny all;
+
+        location = /healthz {
+            access_log off;
+            default_type text/plain;
+            return 200 "gade-a-d7-target-ready\n";
+        }
+
+        location ^~ /lab/ {
+            # Docker Desktop forwards Host and remote Worker traffic through this
+            # stable bridge peer. This is transport ACL only: L4+ mutations are
+            # independently authenticated by the Target using a one-use HMAC.
+            allow __GADE_A_D7_INGRESS_GATEWAY__;
+            deny all;
+            proxy_pass http://gade-a-d7-target:8081;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Request-ID $http_x_request_id;
+            proxy_set_header X-Test-Case-ID $http_x_test_case_id;
+            proxy_set_header X-Run-ID $http_x_run_id;
+            proxy_set_header Authorization $http_authorization;
+            proxy_set_header X-Lab-Reset-Key $http_x_lab_reset_key;
+            proxy_set_header X-GADE-Worker-Timestamp $http_x_gade_worker_timestamp;
+            proxy_set_header X-GADE-Worker-Nonce $http_x_gade_worker_nonce;
+            proxy_set_header X-GADE-Worker-Signature $http_x_gade_worker_signature;
+            proxy_set_header Content-Type $content_type;
+            proxy_connect_timeout 3s;
+            # Reset verifies three independent services; Target bounds their
+            # concurrent component work to 12s and Host waits at most 18s.
+            proxy_read_timeout 15s;
+            proxy_send_timeout 5s;
+            proxy_buffering off;
+        }
+
+        location / {
+            # Docker Desktop presents the authorized Host and Worker through
+            # this isolated ingress bridge peer for the bounded L1 HEAD probe.
+            allow __GADE_A_D7_INGRESS_GATEWAY__;
+            deny all;
+            try_files $uri $uri/ =404;
+        }
+    }
+}
